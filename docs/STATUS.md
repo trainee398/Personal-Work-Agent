@@ -1,7 +1,7 @@
 # WorkPilot 任务状态
 
 当前：T00、T01 已完成；T02 未开始。唯一规格：`docs/V0_1_SPEC.md`。
-仓库：`https://github.com/trainee398/Personal-Work-Agent.git`；T00 已发布，T01 为本地未提交改动。
+仓库：`https://github.com/trainee398/Personal-Work-Agent.git`；维护分支为 `origin/main`，T01 实现提交见下文。
 
 规格原样迁移自 `docs/WORKPILOT_V0_1_SPEC.md`，36042 字节，SHA-256：
 `cc2acbc2d643d8028756baea25efc0f7289c8173d98c46dee04ee16387361ffb`（T01 后再次验证未变）。
@@ -32,6 +32,8 @@
 
 ### 2026-10-30 · 发布、Python 升级及 T01
 
+T01 实现提交：`f52c759d535fd7a9184bb6c890c2787c46f31e4a`（负责人裁决已纳入）。
+
 - **完成项**：按用户顺序将 T00 提交并推送 `origin/main`，远端核验为
   `1369946422bf3830f29d5874c73c01636bd54718`；用户级 `python/python3` 升级为 3.12.14，
   新 shell 验证通过。随后完成 T01：配置/默认值、SQLite 幂等迁移、事务/约束/权限、项目
@@ -46,7 +48,7 @@
   完成 11 步流程（含重复初始化、重名拒绝、诊断、取消/确认清除）；SQLite 3.53.1、schema 1、
   目录/数据库 0700/0600 均符合预期。规格、原 fixture 和演示源文件哈希未变。
 - **风险**：四条规格疑问已由负责人裁决；Python 3.11 与 Linux/Windows 未实测。
-  T01 正在收尾复核，提交哈希在提交后补记；当前尚未推送。
+  收尾复核：pytest 95 项、ruff check、ruff format --check、git diff --check 均通过。
 - **未做事项**：未实施 T02–T06、全文读取/索引、Agent 或审计写入；未访问真实公司文件、
   敏感目录、外部业务系统或真实付费模型；未合并分支。源读取的完整安全策略仍由 T02 验收。
 - **下一任务**：获指派后只做 T02；先复核本页、规格、AGENTS 和 Git 状态。
