@@ -1,8 +1,8 @@
 # WorkPilot（Personal Work Agent）
 
-本地个人工作助手，当前实现到 V0.1 的 **T04 只读 Agent 问答**，负责人已接受阶段成果。
+本地个人工作助手，当前实现到 V0.1 的 **T05 本地审计与安全收口**，负责人已接受阶段成果。
 可登记明确授权的项目文件、增量同步 Markdown、离线查看带来源的摘录、记录人工记忆，
-并在明确允许外发后进行有引用的问答。`ask --dry-run` 可离线预览材料范围；本地审计留待 T05。
+并在明确允许外发后进行有引用的问答。`ask --dry-run` 可离线预览材料范围，`audit` 查看本地脱敏记录。
 
 项目仓库：[trainee398/Personal-Work-Agent](https://github.com/trainee398/Personal-Work-Agent)。
 
@@ -51,6 +51,7 @@ uv run --offline --no-sync workpilot memory add demo --kind decision --text "纯
 uv run --offline --no-sync workpilot memory list demo
 uv run --offline --no-sync workpilot memory list demo --kind decision
 uv run --offline --no-sync workpilot ask demo "当前主要风险是什么？" --dry-run
+uv run --offline --no-sync workpilot audit --limit 20
 uv run --offline --no-sync workpilot doctor
 uv run --offline --no-sync workpilot project remove demo
 uv run --offline --no-sync workpilot project remove demo --purge
@@ -177,6 +178,39 @@ BOM 在入库前去除，CRLF / CR 归一化为 LF。来源 SHA-256 使用原始
 重定向、不自动重试、不使用环境代理；设定 `store=false`，不启用会话或自动工具执行。
 官方 SDK 协议已用离线 HTTP 替身验证，真实服务可达性、模型权限与实际付费问答尚未验证。
 
+## 本地审计
+
+```bash
+.venv/bin/workpilot audit --limit 20
+```
+
+默认展示最近 20 次运行，`--limit` 接受 1–1000。运行按开始时间从新到旧，同秒按写入顺序；
+每次运行内的工具按调用顺序展示。记录包括动作、项目关联、结果、UTC 时间、耗时、允许的计数，
+以及问答模型用量；工具记录包含固定工具名、项目名或相对路径、`read` 权限、结果和耗时。
+仅 `ask` 记录模型名及 tokens，未启动模型回路时留空；用量只累计已收到的有效响应。
+
+CLI 的 `init`、`project add/remove`、`sync`、`status`、`memory add/list`、`ask`（含 dry-run）
+和 `audit` 记录到 `runs`。三个 Agent 工具及 CLI 同步中的源文件读取记录到 `tool_events`，
+正常、拒绝和异常路径均有结果；超过上下文预算的工具材料、因预算跳过的工具记为 `denied`。
+工具名按固定审计清单记录，清单外统一记为 `denied_tool`，原始未知名称和参数不入库。
+本次 `audit` 查询也会留记录，当前输出排除查询自身；项目清除后保留审计并解除项目关联。
+
+审计只接受固定字段，摘要最多 200 字符。问题仅保存 `question_sha256` 与 `question_chars`，
+不保存问题原文、提示、模型回答、文档/记忆正文、摘录、工具参数、请求头或完整环境变量。
+错误仅记录固定类别；未知异常显示程序自写的安全消息，不输出原始 traceback。
+审计展示再次校验字段并处理可能混入元数据的密钥，格式异常时不输出原始记录。
+
+开始执行时先持久化一条未完成记录；工具事件写入成功后才返回结果，模型用量逐次保存。
+正常结束再写完成状态。进程被强制终止或完成写入失败时，记录保留 `error`、空 `finished_at`
+并显示“未完成”；`success` 表示命令正常结束，包括按合同返回“证据不足”的问答。
+审计库不可用会停止后续处理，普通存储错误返回 6、数据库锁冲突返回 7。若本地操作已经提交，
+随后审计写入失败，CLI 会提示检查状态；本地操作与审计完成记录不属于同一个原子事务。
+
+为保留已接受的只读行为，`doctor` 不写审计；`project list` 不在现有 action 枚举中，也不写审计。
+帮助、参数解析失败、无法解析配置或无法安全访问数据库时不建立记录。项目注册先校验来源，
+校验失败仅在已有、安全且与源项目分离的数据库中记账，不会为记录拒绝而提前创建数据库。
+这些边界已记入 [规格疑问](docs/STATUS.md)，当前保持 schema 1。
+
 ## 本地数据与 doctor
 
 未设置 `WORKPILOT_DATA_DIR` 时，数据位于 `~/.local/share/workpilot/workpilot.db`。
@@ -192,7 +226,7 @@ API Key 只显示“已设置/未设置”。普通本地命令不需要 API Key
 `.env.example` 仅列出配置接口，程序不自动读取 `.env`。
 `WORKPILOT_SEND_TO_MODEL` 仅接受 `true` / `false`，默认 `false`；
 `WORKPILOT_STALE_DAYS` 为正整数，默认 7。附录 B 默认值集中在 `config.py`；
-T02–T04 已使用文件、切分、检索、锁、过期及模型预算参数；审计摘要限制留待 T05。
+文件、切分、检索、锁、过期、模型预算和审计摘要上限均使用附录 B 的默认值。
 
 | 退出码 | 当前含义 |
 | --- | --- |
@@ -201,7 +235,7 @@ T02–T04 已使用文件、切分、检索、锁、过期及模型预算参数�
 | 3 | 项目或授权文件不存在 |
 | 4 | 白名单、文件校验、字符预算、工具权限拒绝，或未授权外发 |
 | 5 | 模型请求失败、超时或非法模型响应 |
-| 6 | 缺 Key/模型名，或配置、权限、数据库、自检错误 |
+| 6 | 缺 Key/模型名，或配置、权限、数据库、审计、自检错误 |
 | 7 | 同步锁冲突、数据库资源忙或源文件读取/检查期间变化 |
 
 ## 本地检查
@@ -224,6 +258,9 @@ T04 验收位于 `test_project_tools.py`、`test_citation.py`、`test_agent_cont
 `test_ask_cli.py`、`test_llm.py`，覆盖外发许可、元数据预览、只读工具、引用/撤权/预算/超时、
 错误脱敏、提示注入越权拒绝，以及 SDK 导入隔离和 tracing 关闭。
 Agent 回路使用 `StubModel`；SDK 适配测试使用 `httpx2.MockTransport`，不调用真实模型。
+T05 验收位于 `test_audit.py` 及 `test_llm.py` 的独立进程检查：扫描全部审计字段验证 canary、
+假密钥、问题/回答/正文不泄露，覆盖提示注入、预算拒绝、SQLite 写入故障与锁竞争、部分用量、
+中断记录、清除后审计保留，以及先导入 WorkPilot 或先导入 SDK 时的 NoOpTrace 证明。
 实际执行命令与计数见 [docs/STATUS.md](docs/STATUS.md)。
 
 ## 依赖与结构
@@ -250,8 +287,8 @@ Agent 回路。适配器使用一个 SDK Agent 和 FunctionTool 定义执行单�
 - `src/workpilot/`：CLI、配置、项目登记、SQLite 存储与锁、离线诊断，以及
   `security/` 安全读取、`ingestion/` 归一化/切分/同步、`retrieval.py` 确定性检索、
   `status.py` 离线报告、`memory.py` 人工记忆、`llm/` 模型协议与适配、`agent/` 问答/引用、
-  `tools/` 三个限定范围的只读工具。
-- `tests/`：T00–T04 验收；全部使用纯虚构资料与临时数据目录。
+  `tools/` 三个限定范围的只读工具，以及 `security/audit.py` 本地审计边界。
+- `tests/`：T00–T05 验收；全部使用纯虚构资料与临时数据目录。
 - `tests/fixtures/demo_project/`：纯虚构中文 Markdown、无日期小节、提示注入文本、
   `CANARY-DO-NOT-LEAK`、CRLF 变体和假 `.env`。
 - `.workpilot/`：被忽略的开发缓存或可丢弃数据；`.venv/`、数据库和真实 `.env*` 也被忽略。
@@ -265,7 +302,7 @@ Fixture 的用途见 [tests/fixtures/README.md](tests/fixtures/README.md)。
 
 包初始化时在导入 SDK 前强制设置 tracing 与模型/工具数据日志关闭环境变量；SDK 适配器
 再关闭运行时 tracing 并移除 trace processors。`doctor` 通过 `NoOpTrace` 离线证明关闭，
-不创建 API 客户端。T04 尚不写入 `runs/tool_events`；本地脱敏审计与安全收口由 T05 交付。
+不创建 API 客户端。T05 使用本地 `runs/tool_events` 保存脱敏记录，不启用远端 tracing。
 本项目不修改 QIYE-IM 等业务项目，不扫描敏感目录。本轮开发验证未读取真实公司资料/密钥，
 未运行外部业务操作或真实付费模型。
 

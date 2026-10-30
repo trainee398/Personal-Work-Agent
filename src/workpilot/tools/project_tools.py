@@ -1,6 +1,8 @@
 """Validate tool inputs and read only the material scope frozen for this question."""
 
 import json
+from collections.abc import Callable
+from contextlib import nullcontext
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -16,6 +18,7 @@ from workpilot.domain.models import MemoryKind
 from workpilot.errors import PolicyError
 from workpilot.llm.client import ToolDefinition
 from workpilot.retrieval import relevance_score, tokenize
+from workpilot.security.audit import AuditRun
 
 
 class ProjectInput(BaseModel):
@@ -51,12 +54,36 @@ def tool_definitions() -> tuple[ToolDefinition, ...]:
 
 
 class ProjectTools:
-    def __init__(self, context: AskContext, settings: Settings) -> None:
+    def __init__(
+        self, context: AskContext, settings: Settings, audit: AuditRun | None = None
+    ) -> None:
         self.context, self.settings = context, settings
+        self.audit = audit
         self.delivered: set[str] = set()
         self.memories_read: set[str] = set()
 
-    def invoke(self, name: str, arguments: str) -> dict:
+    def invoke(
+        self, name: str, arguments: str, *, check_result: Callable[[dict], None] | None = None
+    ) -> dict:
+        scope = (
+            nullcontext(self.audit)
+            if self.audit is not None
+            else AuditRun(self.settings, "ask", question=self.context.question)
+        )
+        before_evidence, before_memories = self.delivered.copy(), self.memories_read.copy()
+        try:
+            with scope as audit, audit.tool(name):
+                if self.audit is None:
+                    audit.bind_project(self.context.project.id)
+                result = self._invoke(name, arguments)
+                if check_result is not None:
+                    check_result(result)
+                return result
+        except BaseException:
+            self.delivered, self.memories_read = before_evidence, before_memories
+            raise
+
+    def _invoke(self, name: str, arguments: str) -> dict:
         if name not in INPUT_TYPES:
             raise PolicyError("请求的工具不在三个只读工具的允许清单内。")
         if len(arguments) > MAX_CONTEXT_CHARS:

@@ -63,6 +63,7 @@ def test_package_disables_tracing(
         ["memory", "add", "--help"],
         ["memory", "list", "--help"],
         ["ask", "--help"],
+        ["audit", "--help"],
     ],
 )
 def test_command_help_does_not_load_invalid_configuration(

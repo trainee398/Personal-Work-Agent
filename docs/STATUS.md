@@ -1,8 +1,8 @@
 # WorkPilot 任务状态
 
-当前：**T04 已接受，负责人授权本地提交，随后只实施 T05。**
-提交前分支 `main`，HEAD 为 `35f052e`，比本地跟踪引用 `origin/main` 超前 1 个提交；未推送或合并。
-本轮先完成 T04 本地提交，再进入 T05。唯一规格：[V0_1_SPEC.md](V0_1_SPEC.md)。
+当前：**T05 已接受，负责人授权本地提交，随后只实施 T06。**
+提交前分支 `main`，HEAD 为 `dd804e6`，比本地跟踪引用 `origin/main` 超前 2 个提交；未推送或合并。
+本轮先完成 T05 本地提交，再进入 T06。唯一规格：[V0_1_SPEC.md](V0_1_SPEC.md)。
 
 规格原样保留：36042 字节，SHA-256
 `cc2acbc2d643d8028756baea25efc0f7289c8173d98c46dee04ee16387361ffb`。
@@ -23,6 +23,12 @@
   混合有效/无效引用按规格警示。校验只证明出处，不证明语义；无日期资料统一标注为上次同步读取到。
 - **T04 实现已接受**：SDK 单 Agent/FunctionTool 用于单步模型请求，本地回路执行工具、
   权限与预算；SDK 回调不能绕过。引入 SDK 时同步关闭 tracing，审计持久化与完整安全收口仍属 T05。
+- **T05 实现已接受**：问题哈希/字符数及计数使用 `summary_redacted` 的固定 JSON 字段，
+  上限 200 字符，不新增列或表。现有状态枚举无 running，开始时记 `error/INTERRUPTED`、空完成时间，
+  正常结束再更新；硬中断保留为“未完成”。`audit` 自身留记录但从当次输出排除。
+- **T05 实现已接受**：沿用 doctor 只检查的裁决，不写审计；`project list` 未列入 action
+  枚举，暂不记账。帮助/参数解析/配置失败不落库；注册校验失败仅向已有、安全且与来源分离的库记账，
+  不为审计提前建库。已完成本地操作与审计收尾不是一个事务，后者失败需检查状态，不自动重做或回滚。
 
 ## 交接记录
 
@@ -32,25 +38,26 @@
 [T02 与既有裁决 · 1554524](https://github.com/trainee398/Personal-Work-Agent/blob/1554524/docs/STATUS.md)。
 T01 实现为 `f52c759`；T02 实现为 `e897e61`。T03 已按授权提交 `35f052e`，完整交接可本地查看
 `git show 35f052e:docs/STATUS.md`；提交前 **296 passed in 2.37s**，ruff、格式、diff 检查通过。
+T04 已按授权提交 `dd804e6`，完整交接见 `git show dd804e6:docs/STATUS.md`；提交前
+**413 passed in 4.59s**，ruff、格式、diff 检查通过。以上本地提交未推送。
 
-### 2026-10-30 · T04 只读 Agent 问答（负责人已接受，授权本地提交）
+### 2026-10-30 · T05 本地审计与安全收口（负责人已接受，授权本地提交）
 
-提交前复查：pytest **413 passed in 4.59s**；ruff check、ruff format --check、git diff --check 均通过。
+提交前复查：pytest **462 passed in 7.56s**；ruff check、ruff format --check、git diff --check 均通过。
 
-- **完成项**：ModelClient/OpenAI 适配/StubModel、三个只读工具、ask 与零网络 dry-run、冻结材料与
-  逐轮授权复核、引用强校验/来源时间/人工记忆区分、轮次/字符/双超时/输出预算及安全错误码。
-  固定 `openai-agents==0.24.0`（`openai 3.41.0`、`httpx2 2.16.0`），仅适配官方 Responses；
-  设置 `store=false`，关闭 tracing/自动重试/重定向/环境代理；doctor 通过 NoOpTrace 离线证明。
-- **文件**：新增 `src/workpilot/{llm,agent,tools}/` 和 `tests/test_{project_tools,citation,agent_contract,ask_cli,llm}.py`；
-  更新 CLI、包入口、doctor、共享 fixture、test_cli/test_sync、pyproject/uv.lock、README 和本页。
-  schema、规格、AGENTS 与原始 fixture 未改。
-- **测试结果（已执行，macOS / Python 3.12.14）**：`.venv/bin/python -m pytest -q` **413 passed in 6.97s**；
-  `.venv/bin/ruff check .`、`.venv/bin/ruff format --check .`（55 files）、`git diff --check` 均通过。
-  T04 五个测试文件单独运行 **116 passed in 2.60s**；回路用 StubModel，SDK 用 MockTransport，未连接真实模型。
-  已安装 CLI 在临时虚构项目完成 **9 步离线演示**：帮助、登记/同步、预览、未许可 4、缺配置 6、
-  无命中返回未知、doctor NoOpTrace；每个进程拦截 DNS/TCP。源文件及上述不可变文件哈希核验一致。
-- **风险**：保守引用检查可能拒绝可读但格式不符的回答，仍需人工核对语义；固定候选范围可能降低召回。
-  真实 OpenAI 可达性/模型权限/付费问答、其他供应商、Python 3.11、Linux/Windows 与独立新环境未验证。
-- **未做事项**：未推送/合并，未实施 T05 审计写入或 T06；未读取真实公司资料/密钥，
-  未运行外部业务操作、外发业务文档或调用真实付费模型。仅下载并安装了公开 SDK 依赖。
-- **下一任务**：按负责人授权完成 T04 本地提交，然后只实施 T05 本地审计与安全收口。
+- **完成项**：runs/tool_events 持久化、`audit --limit`、固定字段与摘要上限、问题仅哈希/字符数、
+  CLI 与工具正常/拒绝/异常记录、模型用量逐次保存、清除后审计保留；预算拒绝在返回工具结果前入账。
+  审计故障停止后续模型请求，异常只输出自写消息；验证提示注入不能增加工具或写源文件，tracing 保持关闭。
+- **文件**：新增 `src/workpilot/security/audit.py`、`tests/test_audit.py`；更新仓储、CLI、Agent 回路、
+  project_tools、sync、六个既有测试文件、README 和本页。schema、依赖锁、规格、AGENTS、原始 fixture 未改。
+- **测试结果（已执行，macOS / Python 3.12.14）**：`.venv/bin/python -m pytest -q` **462 passed in 7.89s**
+  （较 T04 新增 49 项）；`.venv/bin/ruff check .`、`.venv/bin/ruff format --check .`（57 files）、
+  `git diff --check` 均通过。真实 SQLite 故障/写锁、部分用量、中断/未完成记录、越权与预算拒绝均覆盖；
+  两种 SDK 导入顺序在独立禁网进程证明 NoOpTrace。Agent/SDK 仍使用 StubModel/MockTransport。
+  已安装 CLI 完成 **10 步离线演示**，得到 8 条 run、1 条 tool event；审计全部字段无 canary、假 Key、
+  问题/正文或来源绝对路径，schema 1、权限 0700/0600、源文件哈希不变；规格/AGENTS/原始 fixture 哈希一致。
+- **风险**：审计收尾失败时，本地操作可能已提交，需检查状态；用量仅覆盖收到的有效响应。
+  引用语义仍需人工核对；T04 记录的真实服务、其他平台与独立新环境验证限制保持不变。
+- **未做事项**：未推送/合并，未实施 T06；未读取真实公司资料/密钥，
+  未运行外部业务操作、外发业务文档或调用真实付费模型；本轮未更新依赖。
+- **下一任务**：按负责人授权完成 T05 本地提交，然后只实施 T06 回归验收与交付文档。

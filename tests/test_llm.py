@@ -3,6 +3,8 @@
 import asyncio
 import json
 import os
+import subprocess
+import sys
 
 import httpx2
 import pytest
@@ -13,6 +15,44 @@ from workpilot.errors import WorkPilotError
 from workpilot.llm.client import Message, ModelRequest
 from workpilot.llm.openai_client import SDK_VERSION, OpenAIModelClient, tracing_status
 from workpilot.tools.project_tools import tool_definitions
+
+
+@pytest.mark.parametrize("sdk_first", [False, True])
+def test_tracing_is_closed_in_fresh_process_for_both_import_orders(sdk_first):
+    script = """
+import os, socket
+def deny(*args, **kwargs):
+    raise AssertionError("No DNS/TCP in tracing test")
+socket.getaddrinfo = deny
+socket.create_connection = deny
+socket.socket.connect = deny
+socket.socket.connect_ex = deny
+os.environ["OPENAI_AGENTS_DISABLE_TRACING"] = "0"
+if SDK_FIRST:
+    import agents
+import workpilot
+from workpilot.llm.openai_client import tracing_status
+version, disabled = tracing_status()
+assert disabled and version == "0.24.0"
+import agents
+from agents.tracing.traces import NoOpTrace
+with agents.trace("CANARY-DO-NOT-LEAK") as trace:
+    assert isinstance(trace, NoOpTrace)
+assert os.environ["OPENAI_AGENTS_DISABLE_TRACING"] == "1"
+assert os.environ["OPENAI_AGENTS_DONT_LOG_MODEL_DATA"] == "1"
+assert os.environ["OPENAI_AGENTS_DONT_LOG_TOOL_DATA"] == "1"
+print("tracing disabled; zero network")
+""".replace("SDK_FIRST", str(sdk_first))
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        env={"PATH": "/usr/bin:/bin"},
+        text=True,
+        capture_output=True,
+        timeout=15,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.strip() == "tracing disabled; zero network"
+    assert not result.stderr
 
 
 def request(messages=None, tools=None):

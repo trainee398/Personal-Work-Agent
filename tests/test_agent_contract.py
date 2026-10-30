@@ -194,8 +194,8 @@ def test_output_budget_and_reused_tool_ids_are_rejected(agent_context):
 def test_revocation_before_next_step_prevents_resending_prior_material(agent_context, monkeypatch):
     original = runtime.ProjectTools.invoke
 
-    def invoke_and_revoke(self, *args):
-        result = original(self, *args)
+    def invoke_and_revoke(self, *args, **kwargs):
+        result = original(self, *args, **kwargs)
         with database(load_settings().data_dir) as connection:
             connection.execute("UPDATE projects SET allowed_files_json = '[\"STATUS_CRLF.md\"]'")
         return result
@@ -233,9 +233,9 @@ def test_budget_exhaustion_skips_remaining_tools_in_the_same_batch(agent_context
     invoked = []
     original = runtime.ProjectTools.invoke
 
-    def track(self, name, arguments):
+    def track(self, name, arguments, **kwargs):
         invoked.append(name)
-        return original(self, name, arguments)
+        return original(self, name, arguments, **kwargs)
 
     monkeypatch.setattr(runtime.ProjectTools, "invoke", track)
     batch = ModelResponse(

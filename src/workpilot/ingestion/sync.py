@@ -1,10 +1,12 @@
 """Only explicitly registered files are read; each source replacement is atomic."""
 
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 
 from workpilot.config import Settings
 from workpilot.errors import ExitCode, NotFoundError, PolicyError, WorkPilotError
 from workpilot.ingestion.markdown import chunk_markdown
+from workpilot.security.audit import AuditError, AuditRun
 from workpilot.security.policy import SourcePolicy, relative_source_path
 from workpilot.storage.db import database
 from workpilot.storage.locking import sync_lock
@@ -42,7 +44,7 @@ def display_path(relative: str) -> str:
         return "[路径被拒绝]"
 
 
-def sync_project(name: str, settings: Settings) -> SyncReport:
+def sync_project(name: str, settings: Settings, *, audit: AuditRun | None = None) -> SyncReport:
     with database(settings.data_dir) as connection:
         projects = ProjectRepository(connection)
         project = projects.get(name)
@@ -58,14 +60,22 @@ def sync_project(name: str, settings: Settings) -> SyncReport:
                 )
             for relative in sorted(project.allowed_files):
                 try:
-                    snapshot = policy.read_source(project.id, relative)
-                    previous = sources.get(project.id, relative)
-                    unchanged = (
-                        previous is not None
-                        and previous["active"]
-                        and previous["sha256"] == snapshot.sha256
+                    scope = (
+                        audit.tool("read_source", relative_path=relative)
+                        if audit
+                        else nullcontext()
                     )
-                    chunks = None if unchanged else chunk_markdown(snapshot.text)
+                    with scope:
+                        snapshot = policy.read_source(project.id, relative)
+                        previous = sources.get(project.id, relative)
+                        unchanged = (
+                            previous is not None
+                            and previous["active"]
+                            and previous["sha256"] == snapshot.sha256
+                        )
+                        chunks = None if unchanged else chunk_markdown(snapshot.text)
+                except AuditError:
+                    raise
                 except (NotFoundError, PolicyError) as error:
                     report.invalidated += int(sources.invalidate(project.id, relative))
                     report.issues.append(

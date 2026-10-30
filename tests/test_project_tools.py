@@ -158,8 +158,8 @@ def test_dry_run_has_only_metadata_and_tools_do_not_change_sources(agent_context
         if path.is_file()
     } == before
     with database(load_settings().data_dir) as connection:
-        assert connection.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 0
-        assert connection.execute("SELECT COUNT(*) FROM tool_events").fetchone()[0] == 0
+        assert connection.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 3
+        assert connection.execute("SELECT COUNT(*) FROM tool_events").fetchone()[0] == 3
 
 
 def test_missing_source_is_excluded_before_preview(agent_context, demo_project):

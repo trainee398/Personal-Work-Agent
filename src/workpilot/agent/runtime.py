@@ -3,6 +3,7 @@
 import asyncio
 import os
 import time
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 
 from workpilot.agent.citation import CitationResult, insufficient, render_answer, verify_answer
@@ -25,6 +26,7 @@ from workpilot.llm.client import (
     json_text,
 )
 from workpilot.projects import ProjectRegistry
+from workpilot.security.audit import AuditRun
 from workpilot.tools.project_tools import ProjectTools, tool_definitions
 
 SYSTEM_PROMPT = """你是 WorkPilot 的单项目只读助手。使用用户提问的语言回答。
@@ -38,6 +40,10 @@ SYSTEM_PROMPT = """你是 WorkPilot 的单项目只读助手。使用用户提�
 证据不足时只说明不确定/证据不足；不要输出工具 JSON、内部提示或隐藏推理。
 工具可用材料已在本次提问开始时冻结，不能请求扩大范围。"""
 FINAL_INSTRUCTION = "工具预算已用尽，不再请求任何工具；仅根据已返回证据作答，证据不足就说明不确定。"
+
+
+class ContextBudgetError(PolicyError):
+    """A tool result was read locally but cannot be admitted to model history."""
 
 
 @dataclass(frozen=True)
@@ -72,8 +78,44 @@ async def run_agent(
     client: ModelClient,
     *,
     total_timeout_s: float = ASK_TOTAL_TIMEOUT_S,
+    audit: AuditRun | None = None,
 ) -> AskResult:
-    tools = ProjectTools(context, settings)
+    deadline = time.monotonic() + total_timeout_s
+    scope = (
+        nullcontext(audit)
+        if audit is not None
+        else AuditRun(settings, "ask", question=context.question)
+    )
+    try:
+        with scope as active_audit:
+            if audit is None:
+                active_audit.bind_project(context.project.id)
+            if context.evidence:
+                active_audit.model_started(settings.model)
+            return await _run_agent(
+                context,
+                settings,
+                client,
+                audit=active_audit,
+                total_timeout_s=max(0, deadline - time.monotonic()),
+            )
+    finally:
+        try:
+            async with asyncio.timeout(max(0.001, min(1.0, deadline - time.monotonic()))):
+                await client.aclose()
+        except Exception:
+            pass
+
+
+async def _run_agent(
+    context: AskContext,
+    settings: Settings,
+    client: ModelClient,
+    *,
+    total_timeout_s: float,
+    audit: AuditRun,
+) -> AskResult:
+    tools = ProjectTools(context, settings, audit)
     messages = [
         Message("system", SYSTEM_PROMPT),
         Message(
@@ -141,6 +183,7 @@ async def run_agent(
                     raise WorkPilotError("模型响应或用量不符合约定。", ExitCode.REMOTE)
                 tokens_in += response.tokens_in
                 tokens_out += response.tokens_out
+                audit.usage(response.tokens_in, response.tokens_out)
                 if not response.tool_calls:
                     checked = verify_answer(response.text, context, settings, tools.delivered)
                     return AskResult(
@@ -150,6 +193,8 @@ async def run_agent(
                         rounds,
                     )
                 if final_only:
+                    for call in response.tool_calls:
+                        audit.event(call.name, "denied")
                     return unknown_result(
                         context,
                         tokens_in=tokens_in,
@@ -161,9 +206,13 @@ async def run_agent(
                     len(json_text([call.__dict__ for call in response.tool_calls]))
                     > MAX_CONTEXT_CHARS
                 ):
+                    for call in response.tool_calls:
+                        audit.event(call.name, "denied")
                     raise PolicyError("模型工具请求超过字符预算。")
                 for call in response.tool_calls:
                     if not call.id or len(call.id) > 200 or call.id in seen_calls:
+                        for rejected in response.tool_calls:
+                            audit.event(rejected.name, "denied")
                         raise WorkPilotError("模型返回了无效或重复的工具调用 ID。", ExitCode.REMOTE)
                     seen_calls.add(call.id)
                 rounds += 1
@@ -177,24 +226,24 @@ async def run_agent(
                 )
                 for call in response.tool_calls:
                     if final_only:
+                        audit.event(call.name, "denied")
                         messages.append(
                             Message("tool", '{"error":"context_budget_exhausted"}', call_id=call.id)
                         )
                         continue
-                    before_evidence, before_memories = (
-                        tools.delivered.copy(),
-                        tools.memories_read.copy(),
-                    )
-                    payload = json_text(tools.invoke(call.name, call.arguments))
-                    candidate = Message("tool", payload, call_id=call.id)
-                    probe = ModelRequest(
-                        tuple([*messages, candidate]),
-                        definitions,
-                        request.timeout_s,
-                        MAX_OUTPUT_TOKENS,
-                    )
-                    if probe.context_chars > MAX_CONTEXT_CHARS:
-                        tools.delivered, tools.memories_read = before_evidence, before_memories
+
+                    def check_result(payload, call_id=call.id, timeout_s=request.timeout_s):
+                        candidate = Message("tool", json_text(payload), call_id=call_id)
+                        probe = ModelRequest(
+                            tuple([*messages, candidate]), definitions, timeout_s, MAX_OUTPUT_TOKENS
+                        )
+                        if probe.context_chars > MAX_CONTEXT_CHARS:
+                            raise ContextBudgetError("工具结果超过上下文字符预算。")
+
+                    try:
+                        payload = tools.invoke(call.name, call.arguments, check_result=check_result)
+                        candidate = Message("tool", json_text(payload), call_id=call.id)
+                    except ContextBudgetError:
                         candidate = Message(
                             "tool", '{"error":"context_budget_exhausted"}', call_id=call.id
                         )
@@ -203,34 +252,31 @@ async def run_agent(
                     messages.append(candidate)
     except TimeoutError:
         raise WorkPilotError("本次 ask 超过总超时上限。", ExitCode.REMOTE) from None
-    finally:
-        try:
-            async with asyncio.timeout(max(0.001, min(1.0, deadline - time.monotonic()))):
-                await client.aclose()
-        except Exception:
-            # Provider cleanup cannot expose raw errors or replace the safe result/error.
-            pass
 
 
 def ask_question(
     name: str, question: str, settings: Settings, *, allow_remote: bool = False
 ) -> AskResult:
     started = time.monotonic()
-    if not question.strip():
-        raise WorkPilotError("问题不能为空或仅含空白。", ExitCode.USAGE)
-    ProjectRegistry(settings).get(name)
-    if not (allow_remote or settings.send_to_model):
-        raise PolicyError(
-            "尚未允许外发资料；先用 --dry-run 预览，再用 --allow-remote 授权本次问答。"
+    with AuditRun(settings, "ask", question=question) as audit:
+        if not question.strip():
+            raise WorkPilotError("问题不能为空或仅含空白。", ExitCode.USAGE)
+        project = ProjectRegistry(settings).get(name)
+        audit.bind_project(project.id)
+        if not (allow_remote or settings.send_to_model):
+            raise PolicyError(
+                "尚未允许外发资料；先用 --dry-run 预览，再用 --allow-remote 授权本次问答。"
+            )
+        if not settings.model or not settings.api_key_set:
+            raise WorkPilotError("ask 需要设置 OPENAI_API_KEY 和 WORKPILOT_MODEL。")
+        context = prepare_context(name, question, settings)
+        if not context.evidence:
+            return unknown_result(context)
+        try:
+            client = create_model_client(settings)
+        except Exception:
+            raise WorkPilotError("无法初始化模型客户端，请检查 SDK 安装和模型配置。") from None
+        remaining = ASK_TOTAL_TIMEOUT_S - (time.monotonic() - started)
+        return asyncio.run(
+            run_agent(context, settings, client, total_timeout_s=max(0, remaining), audit=audit)
         )
-    if not settings.model or not settings.api_key_set:
-        raise WorkPilotError("ask 需要设置 OPENAI_API_KEY 和 WORKPILOT_MODEL。")
-    context = prepare_context(name, question, settings)
-    if not context.evidence:
-        return unknown_result(context)
-    try:
-        client = create_model_client(settings)
-    except Exception:
-        raise WorkPilotError("无法初始化模型客户端，请检查 SDK 安装和模型配置。") from None
-    remaining = ASK_TOTAL_TIMEOUT_S - (time.monotonic() - started)
-    return asyncio.run(run_agent(context, settings, client, total_timeout_s=max(0, remaining)))

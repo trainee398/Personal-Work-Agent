@@ -12,19 +12,21 @@ from rich.text import Text
 
 from workpilot.agent.context import prepare_context, render_preview
 from workpilot.agent.runtime import ask_question
-from workpilot.config import load_settings
+from workpilot.config import Settings, load_settings
 from workpilot.doctor import inspect_environment
 from workpilot.domain.models import MemoryKind
 from workpilot.errors import ExitCode, WorkPilotError
 from workpilot.ingestion.sync import sync_project
 from workpilot.memory import MemoryStore
-from workpilot.projects import ProjectRegistry
+from workpilot.projects import ProjectRegistry, validate_registration
+from workpilot.security.audit import MAX_AUDIT_LIMIT, AuditRun, audit_report, redact_text
+from workpilot.security.policy import hard_denied
 from workpilot.status import project_status, render_status
-from workpilot.storage.db import SCHEMA_VERSION, database
+from workpilot.storage.db import SCHEMA_VERSION, database, readonly_database, validate_schema
 
 app = typer.Typer(
     name="workpilot",
-    help="WorkPilot 个人工作助手：只读项目索引、离线状态、人工记忆与有来源的问答。",
+    help="WorkPilot 个人工作助手：只读项目索引、有来源的问答与本地脱敏审计。",
     add_completion=False,
     invoke_without_command=True,
     pretty_exceptions_show_locals=False,
@@ -50,8 +52,29 @@ def command_errors() -> Iterator[None]:
     try:
         yield
     except WorkPilotError as error:
-        typer.echo(f"错误：{error}", err=True)
+        typer.echo(f"错误：{literal_text(redact_text(str(error)))}", err=True)
         raise typer.Exit(code=int(error.code)) from None
+    except (typer.Exit, typer.Abort):
+        raise
+    except Exception:
+        typer.echo("错误：本地操作失败；未输出原始异常，请检查配置与本地数据。", err=True)
+        raise typer.Exit(code=int(ExitCode.CONFIGURATION)) from None
+
+
+def _audit_registration_failure(settings: Settings, root: Path, error: WorkPilotError) -> None:
+    """Preserve pre-storage validation: log only to an existing, separate, healthy database."""
+    try:
+        if hard_denied(root.parts) or ".." in root.parts or not settings.database_path.exists():
+            return
+        resolved, data_dir = root.expanduser().resolve(), settings.data_dir.resolve()
+        if resolved.is_relative_to(data_dir) or data_dir.is_relative_to(resolved):
+            return
+        with readonly_database(settings.data_dir) as connection:
+            validate_schema(connection)
+    except (WorkPilotError, OSError, RuntimeError):
+        return
+    with AuditRun(settings, "project_add") as audit:
+        audit.fail(error.code)
 
 
 @app.callback()
@@ -66,7 +89,7 @@ def initialize() -> None:
     """幂等初始化本地数据目录和数据库。"""
     with command_errors():
         settings = load_settings()
-        with database(settings.data_dir):
+        with AuditRun(settings, "init"), database(settings.data_dir):
             pass
         typer.echo(f"本地数据已初始化（schema_version={SCHEMA_VERSION}）。")
         typer.echo(f"数据目录：{settings.data_dir}")
@@ -80,7 +103,18 @@ def add_project(
 ) -> None:
     """仅登记指定文件，检查路径元数据；不读取正文。"""
     with command_errors():
-        project = ProjectRegistry(load_settings()).add(name, root, files)
+        settings = load_settings()
+        try:
+            registration = validate_registration(name, root, files, settings)
+        except WorkPilotError as error:
+            _audit_registration_failure(settings, root, error)
+            raise
+        with AuditRun(settings, "project_add") as audit:
+            project = ProjectRegistry(settings).add(
+                registration.name, registration.root, list(registration.allowed_files)
+            )
+            audit.bind_project(project.id)
+            audit.counts(count=len(project.allowed_files))
         typer.echo(f"已登记项目：{project.name}")
         typer.echo(f"根目录：{project.root}")
         for relative in project.allowed_files:
@@ -112,24 +146,29 @@ def remove_project(
 ) -> None:
     """普通移除保留人工记忆；彻底清除需要交互确认。"""
     with command_errors():
-        registry = ProjectRegistry(load_settings())
-        if not purge:
-            project = registry.remove(name)
-            typer.echo(f"已移除登记：{project.name}。旧索引正文已清除，人工记忆和项目名保留。")
-            return
-        project = registry.get(name, include_removed=True)
-        try:
-            confirmed = typer.confirm(
-                f"永久清除项目 {project.name} 的登记、索引和人工记忆？", default=False
-            )
-        except typer.Abort:
-            typer.echo("未收到确认，数据未清除。", err=True)
-            raise typer.Exit(code=int(ExitCode.USAGE)) from None
-        if not confirmed:
-            typer.echo("已取消，数据未清除。")
-            return
-        registry.purge(name, expected_id=project.id)
-        typer.echo(f"已彻底清除项目：{project.name}。")
+        settings = load_settings()
+        registry = ProjectRegistry(settings)
+        with AuditRun(settings, "project_remove") as audit:
+            audit.bind_name(name, include_removed=purge)
+            if not purge:
+                project = registry.remove(name)
+                message = f"已移除登记：{project.name}。旧索引正文已清除，人工记忆和项目名保留。"
+            else:
+                project = registry.get(name, include_removed=True)
+                try:
+                    confirmed = typer.confirm(
+                        f"永久清除项目 {literal_text(project.name)} 的登记、索引和人工记忆？",
+                        default=False,
+                    )
+                except typer.Abort:
+                    raise WorkPilotError("未收到确认，数据未清除。", ExitCode.USAGE) from None
+                if confirmed:
+                    registry.purge(name, expected_id=project.id)
+                    message = f"已彻底清除项目：{project.name}。"
+                else:
+                    audit.counts(cancelled=True)
+                    message = "已取消，数据未清除。"
+        typer.echo(literal_text(message))
 
 
 @app.command("doctor")
@@ -138,7 +177,7 @@ def doctor() -> None:
     with command_errors():
         report = inspect_environment()
         for check in report.checks:
-            typer.echo(f"[{check.state}] {check.name}: {check.detail}")
+            typer.echo(literal_text(redact_text(f"[{check.state}] {check.name}: {check.detail}")))
         if report.exit_code:
             raise typer.Exit(code=report.exit_code)
 
@@ -147,13 +186,22 @@ def doctor() -> None:
 def sync(name: Annotated[str, typer.Argument(help="已登记的项目名。")]) -> None:
     """只读取授权文件，增量更新本地 Markdown 索引。"""
     with command_errors():
-        report = sync_project(name, load_settings())
+        settings = load_settings()
+        with AuditRun(settings, "sync") as audit:
+            audit.bind_name(name)
+            report = sync_project(name, settings, audit=audit)
+            audit.counts(
+                indexed=report.indexed, unchanged=report.unchanged, invalidated=report.invalidated
+            )
+            audit.fail(report.exit_code)
         typer.echo(
             f"同步结束：{report.project_name}；已索引 {report.indexed}，"
             f"未变化 {report.unchanged}，已失效 {report.invalidated}。"
         )
         for issue in report.issues:
-            typer.echo(f"告警：{issue.relative_path}：{issue.message}", err=True)
+            typer.echo(
+                literal_text(redact_text(f"告警：{issue.relative_path}：{issue.message}")), err=True
+            )
         if report.exit_code:
             raise typer.Exit(code=report.exit_code)
 
@@ -162,7 +210,10 @@ def sync(name: Annotated[str, typer.Argument(help="已登记的项目名。")]) 
 def status(name: Annotated[str, typer.Argument(help="已登记的项目名。")]) -> None:
     """离线展示已索引来源、摘录与新鲜度；不读取源文件正文。"""
     with command_errors():
-        report = project_status(name, load_settings())
+        settings = load_settings()
+        with AuditRun(settings, "status") as audit:
+            audit.bind_name(name)
+            report = project_status(name, settings)
         typer.echo(literal_text(render_status(report)))
 
 
@@ -174,7 +225,11 @@ def add_memory(
 ) -> None:
     """保存一条人工记忆；不写入源项目文件或文件证据索引。"""
     with command_errors():
-        entry = MemoryStore(load_settings()).add(name, kind, text)
+        settings = load_settings()
+        with AuditRun(settings, "memory_add") as audit:
+            audit.bind_name(name)
+            entry = MemoryStore(settings).add(name, kind, text)
+            audit.counts(count=1)
         typer.echo(f"已保存人工记忆：{entry.id}（{entry.kind.value}，origin={entry.origin}）。")
         typer.echo(f"创建时间：{entry.created_at}")
         typer.echo("人工记忆，不是项目进度证据。")
@@ -187,7 +242,11 @@ def list_memories(
 ) -> None:
     """按创建时间、ID 升序列出人工记忆，可按类别筛选。"""
     with command_errors():
-        entries = MemoryStore(load_settings()).list(name, kind)
+        settings = load_settings()
+        with AuditRun(settings, "memory_list") as audit:
+            audit.bind_name(name)
+            entries = MemoryStore(settings).list(name, kind)
+            audit.counts(count=len(entries))
         typer.echo(literal_text(f"项目：{name}；人工记忆，不是项目进度证据。"))
         if not entries:
             typer.echo("暂无符合条件的人工记忆。")
@@ -214,7 +273,23 @@ def ask(
     with command_errors():
         settings = load_settings()
         if dry_run:
-            text = render_preview(prepare_context(name, question, settings))
+            with AuditRun(settings, "ask", question=question, dry_run=True) as audit:
+                audit.bind_name(name)
+                text = render_preview(prepare_context(name, question, settings))
         else:
             text = ask_question(name, question, settings, allow_remote=allow_remote).text
         typer.echo(literal_text(text))
+
+
+@app.command("audit")
+def show_audit(
+    limit: Annotated[
+        int, typer.Option("--limit", min=1, max=MAX_AUDIT_LIMIT, help="最近运行条数。")
+    ] = 20,
+) -> None:
+    """离线查看运行与只读工具元数据；不展示问题、文档、提示或回答原文。"""
+    with command_errors():
+        settings = load_settings()
+        with AuditRun(settings, "audit") as audit:
+            report = audit_report(settings, limit, exclude_id=audit.id)
+        typer.echo(literal_text(report))

@@ -84,10 +84,11 @@ def test_memory_order_is_stable_with_timestamp_ties_and_repeated_explicit_input(
             UUID("00000000-0000-4000-8000-000000000001"),
         ]
     )
-    monkeypatch.setattr(repositories, "uuid4", lambda: next(ids))
     store = MemoryStore(load_settings())
-    first = store.add("demo", MemoryKind.NOTE, "重复的人工输入")
-    second = store.add("demo", MemoryKind.NOTE, "重复的人工输入")
+    with monkeypatch.context() as memory_ids:
+        memory_ids.setattr(repositories, "uuid4", lambda: next(ids))
+        first = store.add("demo", MemoryKind.NOTE, "重复的人工输入")
+        second = store.add("demo", MemoryKind.NOTE, "重复的人工输入")
     assert store.list("demo") == [second, first]
     runner = CliRunner()
     one = runner.invoke(app, ["memory", "list", "demo"])
@@ -172,7 +173,9 @@ def test_memory_is_separate_from_evidence_and_never_changes_source_files(
         assert [
             tuple(row) for row in connection.execute("SELECT * FROM source_chunks ORDER BY id")
         ] == chunks
-        assert connection.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 0
+        assert [tuple(row) for row in connection.execute("SELECT action, status FROM runs")] == [
+            ("status", "success")
+        ]
         assert connection.execute("SELECT COUNT(*) FROM tool_events").fetchone()[0] == 0
     assert {path.name: sha256(path.read_bytes()).hexdigest() for path in files} == before
 

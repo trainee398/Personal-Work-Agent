@@ -309,3 +309,85 @@ class MemoryRepository:
             return [MemoryEntry(**dict(row)) for row in rows]
         except ValidationError:
             raise WorkPilotError("人工记忆数据无效，请检查本地数据库。") from None
+
+
+class AuditRepository:
+    """Persist only the fixed metadata fields supplied by the audit boundary."""
+
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self.connection = connection
+
+    def start_run(self, action: str, summary: str) -> str:
+        run_id = str(uuid4())
+        self.connection.execute(
+            """INSERT INTO runs(id, action, status, started_at, error_code, summary_redacted)
+            VALUES (?, ?, 'error', ?, 'INTERRUPTED', ?)""",
+            (run_id, action, utc_now(), summary),
+        )
+        return run_id
+
+    def bind_project(self, run_id: str, project_id: str) -> str:
+        row = self.connection.execute(
+            "SELECT name FROM projects WHERE id = ?", (project_id,)
+        ).fetchone()
+        if row is None:
+            raise NotFoundError("未找到该项目。")
+        result = self.connection.execute(
+            "UPDATE runs SET project_id = ? WHERE id = ?", (project_id, run_id)
+        )
+        if result.rowcount != 1:
+            raise WorkPilotError("本地审计运行记录已失效。")
+        return row["name"]
+
+    def update_run(
+        self,
+        run_id: str,
+        *,
+        status: str,
+        error_code: str | None,
+        model_name: str | None,
+        tokens_in: int | None,
+        tokens_out: int | None,
+        summary: str,
+        finished: bool,
+    ) -> None:
+        result = self.connection.execute(
+            """UPDATE runs SET status = ?, error_code = ?, model_name = ?, tokens_in = ?,
+            tokens_out = ?, summary_redacted = ?, finished_at = ? WHERE id = ?""",
+            (
+                status,
+                error_code,
+                model_name,
+                tokens_in,
+                tokens_out,
+                summary,
+                utc_now() if finished else None,
+                run_id,
+            ),
+        )
+        if result.rowcount != 1:
+            raise WorkPilotError("本地审计运行记录已失效。")
+
+    def add_event(
+        self, run_id: str, tool_name: str, target: str | None, outcome: str, duration_ms: int
+    ) -> None:
+        self.connection.execute(
+            """INSERT INTO tool_events (
+                id, run_id, tool_name, target_redacted, permission, outcome, duration_ms, created_at
+            ) VALUES (?, ?, ?, ?, 'read', ?, ?, ?)""",
+            (str(uuid4()), run_id, tool_name, target, outcome, duration_ms, utc_now()),
+        )
+
+    def list_runs(self, limit: int, exclude_id: str | None = None) -> list[sqlite3.Row]:
+        return self.connection.execute(
+            """SELECT r.*, p.name AS project_name FROM runs r
+            LEFT JOIN projects p ON p.id = r.project_id
+            WHERE (? IS NULL OR r.id != ?)
+            ORDER BY r.started_at DESC, r.rowid DESC LIMIT ?""",
+            (exclude_id, exclude_id, limit),
+        ).fetchall()
+
+    def list_events(self, run_id: str) -> list[sqlite3.Row]:
+        return self.connection.execute(
+            "SELECT * FROM tool_events WHERE run_id = ? ORDER BY created_at, rowid", (run_id,)
+        ).fetchall()

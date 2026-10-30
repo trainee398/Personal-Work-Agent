@@ -331,6 +331,7 @@ def test_missing_project_returns_three_and_later_commands_are_absent():
     assert CliRunner().invoke(app, ["sync", "unknown-project"]).exit_code == 3
     assert set(get_command(app).commands) == {
         "ask",
+        "audit",
         "init",
         "project",
         "doctor",
