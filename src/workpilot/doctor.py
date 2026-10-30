@@ -83,13 +83,24 @@ def inspect_environment() -> DoctorReport:
         "tracing", tracing_disabled, "环境变量已关闭" if tracing_disabled else "环境变量未关闭"
     )
     sdk_installed = importlib.util.find_spec("agents") is not None
-    report.checks.append(
-        Check(
-            "Agents SDK",
-            "WARN" if sdk_installed else "OK",
-            "已安装；SDK 运行时关闭证明待 T05" if sdk_installed else "未安装；本命令不导入模型 SDK",
+    if sdk_installed and tracing_disabled:
+        from workpilot.llm.openai_client import tracing_status
+
+        try:
+            sdk_version, disabled = tracing_status()
+            report.add(
+                "Agents SDK",
+                disabled,
+                f"{sdk_version}；SDK 运行时 tracing 已关闭（NoOpTrace）"
+                if disabled
+                else "SDK 运行时 tracing 未关闭",
+            )
+        except WorkPilotError as error:
+            report.add("Agents SDK", False, str(error))
+    else:
+        report.checks.append(
+            Check("Agents SDK", "WARN", "未安装或 tracing 环境变量异常；未导入模型 SDK")
         )
-    )
     try:
         settings = load_settings()
     except WorkPilotError as error:

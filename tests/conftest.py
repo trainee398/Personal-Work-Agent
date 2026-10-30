@@ -44,3 +44,23 @@ def registered_project(demo_project: Path):
     from workpilot.projects import ProjectRegistry
 
     return ProjectRegistry(load_settings()).add("demo", demo_project, ["STATUS.md"])
+
+
+@pytest.fixture
+def agent_context(registered_project, demo_project: Path):
+    """A small undated fictional source and an explicitly separate manual decision."""
+    from workpilot.agent.context import prepare_context
+    from workpilot.config import load_settings
+    from workpilot.domain.models import MemoryKind
+    from workpilot.ingestion.sync import sync_project
+    from workpilot.memory import MemoryStore
+
+    (demo_project / "STATUS.md").write_text(
+        "# 虚构项目\n## 风险\n测试书目数量不足，可能影响虚构检索演示。\n"
+        "## 下一步\n先补充纯虚构书目。\n",
+        encoding="utf-8",
+    )
+    settings = load_settings()
+    assert sync_project("demo", settings).exit_code == 0
+    MemoryStore(settings).add("demo", MemoryKind.DECISION, "人工决定：先安排一次虚构评审。")
+    return prepare_context("demo", "当前风险是什么？", settings)

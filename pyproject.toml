@@ -12,6 +12,7 @@ dependencies = [
     "typer>=0.12,<1",
     "rich>=14,<15",
     "pydantic>=2,<3",
+    "openai-agents==0.24.0",
 ]
 
 [project.scripts]

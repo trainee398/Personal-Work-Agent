@@ -10,6 +10,8 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
+from workpilot.agent.context import prepare_context, render_preview
+from workpilot.agent.runtime import ask_question
 from workpilot.config import load_settings
 from workpilot.doctor import inspect_environment
 from workpilot.domain.models import MemoryKind
@@ -22,7 +24,7 @@ from workpilot.storage.db import SCHEMA_VERSION, database
 
 app = typer.Typer(
     name="workpilot",
-    help="WorkPilot 个人工作助手：项目登记、只读同步、离线状态与人工记忆。",
+    help="WorkPilot 个人工作助手：只读项目索引、离线状态、人工记忆与有来源的问答。",
     add_completion=False,
     invoke_without_command=True,
     pretty_exceptions_show_locals=False,
@@ -195,3 +197,24 @@ def list_memories(
             typer.echo("正文：")
             for line in literal_text(entry.body).split("\n"):
                 typer.echo(f"  {line}")
+
+
+@app.command("ask")
+def ask(
+    name: Annotated[str, typer.Argument(help="已登记的项目名。")],
+    question: Annotated[str, typer.Argument(help="基于项目证据的问题。")],
+    allow_remote: Annotated[
+        bool, typer.Option("--allow-remote", help="允许本次选定材料发送至官方 OpenAI API。")
+    ] = False,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="仅预览外发范围，零网络、无需 API Key。")
+    ] = False,
+) -> None:
+    """用三个只读工具回答问题；未授权、证据不足或引用无效时失败关闭。"""
+    with command_errors():
+        settings = load_settings()
+        if dry_run:
+            text = render_preview(prepare_context(name, question, settings))
+        else:
+            text = ask_question(name, question, settings, allow_remote=allow_remote).text
+        typer.echo(literal_text(text))

@@ -1,8 +1,8 @@
 # WorkPilot（Personal Work Agent）
 
-本地个人工作助手，当前实现到 V0.1 的 **T03 离线状态与人工记忆**，负责人已接受阶段成果。
+本地个人工作助手，当前实现到 V0.1 的 **T04 只读 Agent 问答**，负责人已接受阶段成果。
 可登记明确授权的项目文件、增量同步 Markdown、离线查看带来源的摘录、记录人工记忆，
-并执行项目移除和环境自检。问答和审计命令留待 T04–T05。
+并在明确允许外发后进行有引用的问答。`ask --dry-run` 可离线预览材料范围；本地审计留待 T05。
 
 项目仓库：[trainee398/Personal-Work-Agent](https://github.com/trainee398/Personal-Work-Agent)。
 
@@ -50,6 +50,7 @@ uv run --offline --no-sync workpilot status demo
 uv run --offline --no-sync workpilot memory add demo --kind decision --text "纯虚构：本轮先完成离线验收"
 uv run --offline --no-sync workpilot memory list demo
 uv run --offline --no-sync workpilot memory list demo --kind decision
+uv run --offline --no-sync workpilot ask demo "当前主要风险是什么？" --dry-run
 uv run --offline --no-sync workpilot doctor
 uv run --offline --no-sync workpilot project remove demo
 uv run --offline --no-sync workpilot project remove demo --purge
@@ -94,7 +95,7 @@ BOM 在入库前去除，CRLF / CR 归一化为 LF。来源 SHA-256 使用原始
 `sync` 对数据目录中的 `workpilot.lock` 加非阻塞 `fcntl.flock` 独占锁，覆盖所有项目；
 锁占用时立即返回 7，不读取源文件。完成或异常均释放锁，锁文件本身保留，以维持同一 inode。
 
-T02 提供内部检索函数 `workpilot.retrieval.search_sources`，暂不增加检索 CLI 或 Agent 工具。
+内部检索函数 `workpilot.retrieval.search_sources` 提供确定性检索；T04 工具复用同一分词与打分规则。
 它在同一 SQLite 读取快照内筛选仍授权的 active 来源：NFKC、ASCII 小写，ASCII 按词、
 中日韩连续文字按双字滑窗分词；查询词去重后按标题命中 ×3、正文出现次数封顶 3 打分。
 同分依次按相对路径、起始行排序，最多返回 8 块，摘录连同省略号不超过 400 字符。
@@ -126,6 +127,56 @@ T02 提供内部检索函数 `workpilot.retrieval.search_sources`，暂不增加
 重复输入会新增独立记录；文件资料缺失时仍可记录笔记，但 `status` 不会用笔记补造项目进度。
 终端控制字符以可见转义形式展示，正文存储不变；文档和记忆中的指令只作为数据处理。
 
+## 只读问答与外发预览
+
+对已登记且完成 `sync` 的项目，先查看本次问题的候选材料清单：
+
+```bash
+.venv/bin/workpilot ask demo "当前主要风险是什么？" --dry-run
+```
+
+预览无需 API Key、模型名或外发许可，不导入模型 SDK、不创建 API 客户端、不联网。
+它只显示问题、来源概要、文件切片及人工记忆的类别、相对路径或记忆 ID、行号、字符数和
+估算 tokens，不打印问题原文、标题、摘录或记忆正文。tokens 按 UTF-8 字节数除以 3 向上取整，
+仅用于粗略估算，不代表服务端实际计费。
+
+每次提问在本地冻结工具可返回的范围：可用来源的一二级标题及元数据、原问题命中的最多
+8 个切片（每个摘录含省略号最多 400 字符），以及本项目的人工记忆。实际问答可能只使用
+其中一部分；模型不能通过改写查询扩大到其他切片或项目。新一次 `ask` 会重新选择和检查材料，
+`dry-run` 不保存外发许可。已缺失、停用、撤权或检测到 mtime/size 变化的旧内容不纳入候选。
+
+确需外发时，通过环境注入自己的 `OPENAI_API_KEY` 和 `WORKPILOT_MODEL`，再明确授权当次问答：
+
+```bash
+.venv/bin/workpilot ask demo "当前主要风险是什么？" --allow-remote
+```
+
+模型名无默认值，须支持官方 Responses API 的 function tools。`--allow-remote` 仅本次生效；
+显式设置 `WORKPILOT_SEND_TO_MODEL=true` 等价于为该环境中的每次 `ask` 授权，程序不会替用户
+修改此设置。`--dry-run` 始终优先，即使同时带许可或设置了上述环境变量也不调用模型。
+无许可返回 4，缺 Key 或模型名返回 6；无命中文件证据时输出“现有索引不足以回答该问题”，
+正常结束且不创建客户端。人工记忆不能填补文件证据空缺。
+
+三个只读工具为 `get_project_overview`、`search_project_sources`、`list_project_memories`。
+工具参数绑定本次项目，拒绝任意路径、额外字段、跨项目访问及其他能力；每次工具调用与
+模型请求前重新核验已选材料，避免在撤权后继续发送历史内容。只有实际返回给模型的摘录
+才能作为回答证据，人工记忆另列并注明“人工记忆，不是项目进度证据”。
+
+每个事实句须附 `[相对路径:Lx-Ly]`。程序校验真实路径、当前授权和 active 来源、切片身份与
+哈希、完整行号范围，以及该范围是否已在工具摘录中返回；截断后完全未发送的后续行不可引用。
+混有无效引用时在顶部警示并列出条目；没有有效引用或存在无引用句时失败关闭，不展示模型原文。
+回答末尾固定列出来源和 `indexed_at`；注明资料来自上次同步，过期索引或最终生成期间检测到
+文件 stat 变化会告警。引用校验能证明出处与范围，不能证明句意一定由摘录支持，仍需人工核对。
+
+每次问答最多 6 个工具轮次，随后只允许一个禁用工具的收尾回合；单次模型请求最长 60 秒，
+整次问答预算 120 秒，每次模型输出最多 2000 tokens。候选材料与每次序列化上下文均检查
+12000 字符上限（上下文含问题、系统提示、工具 schema、调用和历史结果）；超大工具结果不
+加入历史，并停止继续取材。候选材料过大返回 4；网络、超时或非法模型响应返回 5，错误脱敏。
+
+目前仅适配 `https://api.openai.com/v1` 的 Responses API，忽略 `OPENAI_BASE_URL`，不跟随
+重定向、不自动重试、不使用环境代理；设定 `store=false`，不启用会话或自动工具执行。
+官方 SDK 协议已用离线 HTTP 替身验证，真实服务可达性、模型权限与实际付费问答尚未验证。
+
 ## 本地数据与 doctor
 
 未设置 `WORKPILOT_DATA_DIR` 时，数据位于 `~/.local/share/workpilot/workpilot.db`。
@@ -134,22 +185,23 @@ T02 提供内部检索函数 `workpilot.retrieval.search_sources`，暂不增加
 未知版本、缺少版本信息的既有数据库不会被覆盖或降级。
 
 `doctor` 完全离线检查解释器、SQLite/FTS5、配置、目录和数据库权限、完整性、schema、
-表计数、tracing 环境变量及锁状态。它不自动初始化、迁移或修复，以便如实暴露问题。
+表计数、tracing 环境变量与 SDK 运行时关闭状态及锁状态。它不自动初始化、迁移或修复，以便如实暴露问题。
 新环境未初始化时返回 6，先运行 `init`；FTS5 不可用或锁正被占用仅作提示，不等待锁。
 API Key 只显示“已设置/未设置”。普通本地命令不需要 API Key 或模型名。
 
 `.env.example` 仅列出配置接口，程序不自动读取 `.env`。
 `WORKPILOT_SEND_TO_MODEL` 仅接受 `true` / `false`，默认 `false`；
 `WORKPILOT_STALE_DAYS` 为正整数，默认 7。附录 B 默认值集中在 `config.py`；
-T02/T03 已使用文件、切分、检索、锁和过期参数，模型预算留待后续任务。
+T02–T04 已使用文件、切分、检索、锁、过期及模型预算参数；审计摘要限制留待 T05。
 
 | 退出码 | 当前含义 |
 | --- | --- |
-| 0 | 成功、状态报告告警，或用户取消清除 |
-| 2 | 用法错误、重复名称、无效根目录、空白记忆、清除未收到确认 |
+| 0 | 成功、状态报告告警、问答证据不足，或用户取消清除 |
+| 2 | 用法错误、重复名称、无效根目录、空白记忆/问题、清除未收到确认 |
 | 3 | 项目或授权文件不存在 |
-| 4 | 白名单、路径、文件类型、大小、编码或切片限制拒绝 |
-| 6 | 配置、权限、数据库或自检错误 |
+| 4 | 白名单、文件校验、字符预算、工具权限拒绝，或未授权外发 |
+| 5 | 模型请求失败、超时或非法模型响应 |
+| 6 | 缺 Key/模型名，或配置、权限、数据库、自检错误 |
 | 7 | 同步锁冲突、数据库资源忙或源文件读取/检查期间变化 |
 
 ## 本地检查
@@ -168,6 +220,10 @@ T02 验收集中在 `test_markdown.py`、`test_security.py`、`test_sync.py`、`
 和 `test_retrieval.py`：包含真实 SQLite 事务故障、真实双进程锁竞争和虚构文件替换竞态。
 T03 验收位于 `test_status.py`、`test_memory.py`，覆盖确定性来源报告、过期边界、缺失/撤权、
 元数据检查竞态、SQLite 读取快照、人工记忆持久化/隔离/回滚及源文件哈希不变。
+T04 验收位于 `test_project_tools.py`、`test_citation.py`、`test_agent_contract.py`、
+`test_ask_cli.py`、`test_llm.py`，覆盖外发许可、元数据预览、只读工具、引用/撤权/预算/超时、
+错误脱敏、提示注入越权拒绝，以及 SDK 导入隔离和 tracing 关闭。
+Agent 回路使用 `StubModel`；SDK 适配测试使用 `httpx2.MockTransport`，不调用真实模型。
 实际执行命令与计数见 [docs/STATUS.md](docs/STATUS.md)。
 
 ## 依赖与结构
@@ -182,16 +238,20 @@ T03 验收位于 `test_status.py`、`test_memory.py`，覆盖确定性来源报�
 | Typer | 0.27.3 |
 | Rich | 14.3.4 |
 | Pydantic | 2.14.2 |
+| openai-agents | 0.24.0（精确固定） |
 | pytest | 8.4.2 |
 | ruff | 0.17.3 |
 
-当前未引入 `openai-agents`。T04 引入时必须选择并固定经验证的具体版本、记录到 README，
-并将 SDK 隔离在 `llm/` 的实现中；当前不预设未经验证的 SDK 版本。
+SDK 的关键传递依赖为 `openai==3.41.0`、`httpx2==2.16.0`，协议与 tracing 已离线验证。
+产品代码中仅 `llm/openai_client.py` 导入 Agents SDK，通过 `ModelClient` 协议接入本地
+Agent 回路。适配器使用一个 SDK Agent 和 FunctionTool 定义执行单步模型请求；工具执行、
+授权与预算由本地回路控制，SDK 回调不能绕过这些检查。供应商替换需负责人明确决定。
 
 - `src/workpilot/`：CLI、配置、项目登记、SQLite 存储与锁、离线诊断，以及
   `security/` 安全读取、`ingestion/` 归一化/切分/同步、`retrieval.py` 确定性检索、
-  `status.py` 离线报告和 `memory.py` 人工记忆。
-- `tests/`：T00–T03 验收；全部使用纯虚构资料与临时数据目录。
+  `status.py` 离线报告、`memory.py` 人工记忆、`llm/` 模型协议与适配、`agent/` 问答/引用、
+  `tools/` 三个限定范围的只读工具。
+- `tests/`：T00–T04 验收；全部使用纯虚构资料与临时数据目录。
 - `tests/fixtures/demo_project/`：纯虚构中文 Markdown、无日期小节、提示注入文本、
   `CANARY-DO-NOT-LEAK`、CRLF 变体和假 `.env`。
 - `.workpilot/`：被忽略的开发缓存或可丢弃数据；`.venv/`、数据库和真实 `.env*` 也被忽略。
@@ -203,8 +263,10 @@ Fixture 的用途见 [tests/fixtures/README.md](tests/fixtures/README.md)。
 
 ## 当前边界
 
-包初始化时强制设置 `OPENAI_AGENTS_DISABLE_TRACING=1`；当前不安装或导入模型 SDK。
-SDK 运行时关闭的完整证明留待 T04/T05，当前 `doctor` 明确区分环境变量与 SDK 状态。
-本项目不修改 QIYE-IM 等业务项目，不扫描敏感目录，不执行外部业务操作或真实模型调用。
+包初始化时在导入 SDK 前强制设置 tracing 与模型/工具数据日志关闭环境变量；SDK 适配器
+再关闭运行时 tracing 并移除 trace processors。`doctor` 通过 `NoOpTrace` 离线证明关闭，
+不创建 API 客户端。T04 尚不写入 `runs/tool_events`；本地脱敏审计与安全收口由 T05 交付。
+本项目不修改 QIYE-IM 等业务项目，不扫描敏感目录。本轮开发验证未读取真实公司资料/密钥，
+未运行外部业务操作或真实付费模型。
 
 macOS 为首要目标，Linux 兼容性待验证，Windows 在 V0.1 中不作承诺。
