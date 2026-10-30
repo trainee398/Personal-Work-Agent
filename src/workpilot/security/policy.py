@@ -3,7 +3,8 @@
 import os
 import sqlite3
 import stat
-from contextlib import ExitStack
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path, PureWindowsPath
@@ -91,8 +92,11 @@ class SourcePolicy:
             raise PolicyError("登记的项目根路径不安全。")
         return project
 
-    def read_source(self, project_id: str, relative_path: str) -> SourceSnapshot:
-        """No arbitrary OS path parameter, recursion, network or source writes."""
+    @contextmanager
+    def _checked_source(
+        self, project_id: str, relative_path: str
+    ) -> Iterator[tuple[int, os.stat_result]]:
+        """Share the same authorization and identity checks for stat and content reads."""
         project = self._authorize(project_id, relative_path)
         candidate = project.root / relative_source_path(relative_path)
         try:
@@ -121,19 +125,10 @@ class SourcePolicy:
                 _validate_file(before)
                 if _signature(before) != _signature(before_path):
                     raise _changed()
-                pieces = []
-                size = 0
-                while True:
-                    piece = os.read(descriptor, min(65536, MAX_FILE_BYTES + 1 - size))
-                    if not piece:
-                        break
-                    pieces.append(piece)
-                    size += len(piece)
-                    if size > MAX_FILE_BYTES:
-                        raise PolicyError("读取期间源文件超过 1 MiB 上限。")
+                yield descriptor, before
                 after = os.fstat(descriptor)
                 _validate_file(after)
-                if _signature(before) != _signature(after) or size != after.st_size:
+                if _signature(before) != _signature(after):
                     raise _changed()
                 if candidate.resolve(strict=True) != resolved or project.root.resolve() != root:
                     raise PolicyError("读取期间源文件或项目路径的授权范围发生变化。")
@@ -144,17 +139,40 @@ class SourcePolicy:
                 current = self._authorize(project_id, relative_path)
                 if current.root != project.root:
                     raise PolicyError("读取期间项目根目录授权发生变化。")
-                raw = b"".join(pieces)
-                return SourceSnapshot(
-                    relative_path=relative_path,
-                    text=normalize_markdown(raw),
-                    sha256=sha256(raw).hexdigest(),
-                    size_bytes=len(raw),
-                    file_mtime_utc=datetime.fromtimestamp(
-                        after.st_mtime_ns // 1_000_000_000, UTC
-                    ).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                )
         except FileNotFoundError:
             raise NotFoundError("授权来源缺失。") from None
         except (OSError, RuntimeError, ValueError):
             raise PolicyError("无法安全读取授权来源，请检查路径、类型与读取权限。") from None
+
+    def inspect_source(self, project_id: str, relative_path: str) -> os.stat_result:
+        """Inspect an authorized file without reading any source content."""
+        with self._checked_source(project_id, relative_path) as (_, info):
+            pass
+        return info
+
+    def read_source(self, project_id: str, relative_path: str) -> SourceSnapshot:
+        """No arbitrary OS path parameter, recursion, network or source writes."""
+        with self._checked_source(project_id, relative_path) as (descriptor, info):
+            pieces = []
+            size = 0
+            while True:
+                piece = os.read(descriptor, min(65536, MAX_FILE_BYTES + 1 - size))
+                if not piece:
+                    break
+                pieces.append(piece)
+                size += len(piece)
+                if size > MAX_FILE_BYTES:
+                    raise PolicyError("读取期间源文件超过 1 MiB 上限。")
+            if size != info.st_size:
+                raise _changed()
+            raw = b"".join(pieces)
+            text = normalize_markdown(raw)
+        return SourceSnapshot(
+            relative_path=relative_path,
+            text=text,
+            sha256=sha256(raw).hexdigest(),
+            size_bytes=len(raw),
+            file_mtime_utc=datetime.fromtimestamp(info.st_mtime_ns // 1_000_000_000, UTC).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            ),
+        )

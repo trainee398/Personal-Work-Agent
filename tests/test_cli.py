@@ -58,6 +58,10 @@ def test_package_disables_tracing(
         ["project", "add", "--help"],
         ["project", "list", "--help"],
         ["project", "remove", "--help"],
+        ["status", "--help"],
+        ["memory", "--help"],
+        ["memory", "add", "--help"],
+        ["memory", "list", "--help"],
     ],
 )
 def test_command_help_does_not_load_invalid_configuration(

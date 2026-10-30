@@ -8,7 +8,12 @@ from uuid import uuid4
 from pydantic import ValidationError
 
 from workpilot.domain.models import (
-    MemoryEntry, MemoryKind, Project, ProjectRegistration, SourceChunk, SourceSnapshot,
+    MemoryEntry,
+    MemoryKind,
+    Project,
+    ProjectRegistration,
+    SourceChunk,
+    SourceSnapshot,
 )
 from workpilot.errors import ExitCode, NotFoundError, PolicyError, WorkPilotError
 from workpilot.storage.db import transaction
@@ -271,18 +276,24 @@ class MemoryRepository:
         self.connection = connection
 
     def add(self, project_id: str, kind: MemoryKind, body: str) -> MemoryEntry:
+        if not body.strip():
+            raise WorkPilotError("人工记忆正文不能为空或仅含空白。", ExitCode.USAGE)
         with transaction(self.connection):
             ProjectRepository(self.connection).get_by_id(project_id)
             timestamp = utc_now()
             entry = MemoryEntry(
-                id=str(uuid4()), project_id=project_id, kind=kind, body=body,
-                created_at=timestamp, updated_at=timestamp,
+                id=str(uuid4()),
+                project_id=project_id,
+                kind=kind,
+                body=body,
+                created_at=timestamp,
+                updated_at=timestamp,
             )
             self.connection.execute(
                 """INSERT INTO memory_entries (
                     id, project_id, kind, body, origin, created_at, updated_at
                 ) VALUES (?, ?, ?, ?, 'manual', ?, ?)""",
-                (entry.id, project_id, kind.value, body, timestamp, timestamp),
+                (entry.id, project_id, entry.kind.value, body, timestamp, timestamp),
             )
         return entry
 

@@ -1,4 +1,4 @@
-"""Local project registration, read-only sync and offline diagnostics."""
+"""Local registration, indexing, offline status, manual memories and diagnostics."""
 
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -12,20 +12,35 @@ from rich.text import Text
 
 from workpilot.config import load_settings
 from workpilot.doctor import inspect_environment
+from workpilot.domain.models import MemoryKind
 from workpilot.errors import ExitCode, WorkPilotError
 from workpilot.ingestion.sync import sync_project
+from workpilot.memory import MemoryStore
 from workpilot.projects import ProjectRegistry
+from workpilot.status import project_status, render_status
 from workpilot.storage.db import SCHEMA_VERSION, database
 
 app = typer.Typer(
     name="workpilot",
-    help="WorkPilot 个人工作助手：项目登记、只读同步与离线环境检查。",
+    help="WorkPilot 个人工作助手：项目登记、只读同步、离线状态与人工记忆。",
     add_completion=False,
     invoke_without_command=True,
     pretty_exceptions_show_locals=False,
 )
 project_app = typer.Typer(help="登记、查看或移除明确授权的项目。", no_args_is_help=True)
 app.add_typer(project_app, name="project")
+memory_app = typer.Typer(help="显式记录或查看人工记忆；不是项目进度证据。", no_args_is_help=True)
+app.add_typer(memory_app, name="memory")
+
+
+def literal_text(value: str) -> str:
+    """Show untrusted text literally without terminal control sequences."""
+    return "".join(
+        f"\\x{ord(character):02x}"
+        if (ord(character) < 32 and character not in "\n\t") or 127 <= ord(character) < 160
+        else character
+        for character in value
+    )
 
 
 @contextmanager
@@ -139,3 +154,44 @@ def sync(name: Annotated[str, typer.Argument(help="已登记的项目名。")]) 
             typer.echo(f"告警：{issue.relative_path}：{issue.message}", err=True)
         if report.exit_code:
             raise typer.Exit(code=report.exit_code)
+
+
+@app.command("status")
+def status(name: Annotated[str, typer.Argument(help="已登记的项目名。")]) -> None:
+    """离线展示已索引来源、摘录与新鲜度；不读取源文件正文。"""
+    with command_errors():
+        report = project_status(name, load_settings())
+        typer.echo(literal_text(render_status(report)))
+
+
+@memory_app.command("add")
+def add_memory(
+    name: Annotated[str, typer.Argument(help="已登记的项目名。")],
+    kind: Annotated[MemoryKind, typer.Option("--kind", help="人工决策、备注或偏好。")],
+    text: Annotated[str, typer.Option("--text", help="明确输入的记忆正文，不能为空。")],
+) -> None:
+    """保存一条人工记忆；不写入源项目文件或文件证据索引。"""
+    with command_errors():
+        entry = MemoryStore(load_settings()).add(name, kind, text)
+        typer.echo(f"已保存人工记忆：{entry.id}（{entry.kind.value}，origin={entry.origin}）。")
+        typer.echo(f"创建时间：{entry.created_at}")
+        typer.echo("人工记忆，不是项目进度证据。")
+
+
+@memory_app.command("list")
+def list_memories(
+    name: Annotated[str, typer.Argument(help="已登记的项目名。")],
+    kind: Annotated[MemoryKind | None, typer.Option("--kind", help="仅列出指定类别。")] = None,
+) -> None:
+    """按创建时间、ID 升序列出人工记忆，可按类别筛选。"""
+    with command_errors():
+        entries = MemoryStore(load_settings()).list(name, kind)
+        typer.echo(literal_text(f"项目：{name}；人工记忆，不是项目进度证据。"))
+        if not entries:
+            typer.echo("暂无符合条件的人工记忆。")
+        for entry in entries:
+            typer.echo(f"{entry.id} | kind={entry.kind.value} | origin={entry.origin}")
+            typer.echo(f"创建时间：{entry.created_at}；更新时间：{entry.updated_at}")
+            typer.echo("正文：")
+            for line in literal_text(entry.body).split("\n"):
+                typer.echo(f"  {line}")

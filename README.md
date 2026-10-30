@@ -1,8 +1,8 @@
 # WorkPilot（Personal Work Agent）
 
-本地个人工作助手，当前实现到 V0.1 的 **T02 Markdown 只读索引**，负责人已接受阶段成果。
-可初始化 SQLite、登记明确授权的项目文件、增量同步 Markdown、移除登记和执行离线自检。
-状态报告、记忆、问答和审计命令按 T03–T05 实施，当前尚不可用。
+本地个人工作助手，当前实现到 V0.1 的 **T03 离线状态与人工记忆**，负责人已接受阶段成果。
+可登记明确授权的项目文件、增量同步 Markdown、离线查看带来源的摘录、记录人工记忆，
+并执行项目移除和环境自检。问答和审计命令留待 T04–T05。
 
 项目仓库：[trainee398/Personal-Work-Agent](https://github.com/trainee398/Personal-Work-Agent)。
 
@@ -43,8 +43,13 @@ export WORKPILOT_DATA_DIR="$PWD/.workpilot/demo-data"
 uv run --offline --no-sync workpilot init
 uv run --offline --no-sync workpilot project add demo --root ./tests/fixtures/demo_project --file STATUS.md
 uv run --offline --no-sync workpilot project list
+uv run --offline --no-sync workpilot status demo
 uv run --offline --no-sync workpilot sync demo
 uv run --offline --no-sync workpilot sync demo
+uv run --offline --no-sync workpilot status demo
+uv run --offline --no-sync workpilot memory add demo --kind decision --text "纯虚构：本轮先完成离线验收"
+uv run --offline --no-sync workpilot memory list demo
+uv run --offline --no-sync workpilot memory list demo --kind decision
 uv run --offline --no-sync workpilot doctor
 uv run --offline --no-sync workpilot project remove demo
 uv run --offline --no-sync workpilot project remove demo --purge
@@ -95,6 +100,32 @@ T02 提供内部检索函数 `workpilot.retrieval.search_sources`，暂不增加
 同分依次按相对路径、起始行排序，最多返回 8 块，摘录连同省略号不超过 400 字符。
 空查询、单个中日韩字或零命中返回空列表；来源被删除后的旧证据在下次同步清理后不可检索。
 
+## 离线状态与人工记忆
+
+`status demo` 无需 API Key 或模型名，不调用网络或模型，不读取源文件正文，不触发同步。
+它在同一 SQLite 读取快照内取得来源元数据和摘录，并复用安全文件描述符检查当前文件的
+授权、路径、类型、大小和 mtime。固定输出顺序为项目名/根目录、上次同步时间、按相对路径
+排序的来源表、告警；随后展示文件证据摘录。输出为纯文本，不随终端宽度截断来源信息。
+
+来源表包含状态、SHA-256 前 8 位、已存切片的最大行号、`indexed_at` 和过期标记。
+`active` 表示索引仍启用，`missing` 表示当前文件缺失，`unindexed` 表示尚未索引，
+`inactive` 表示旧索引已停用。未索引文件的哈希、行数和时间显示为空；索引为空明确提示
+“无已索引资料”。数据库未保存项目级同步尝试时间，因此“上次同步时间”明确取已记录来源
+最大的 `indexed_at`；没有来源记录时不会以项目登记时间代替。
+
+每个可用来源展示首个切片的最多 400 字符，保留 `[相对路径:Lx-Ly]` 与索引时间，并注明
+“在上次同步时读取到”。超过 `WORKPILOT_STALE_DAYS`（默认 7 天，严格大于才算过期）
+会告警；文件缺失、来源失效或检测到 mtime/size 变化时隐藏旧摘录。已撤权来源不展示正文，
+也不再探测该文件；清理旧切片仍由 `sync` 完成。缺失/未索引/过期属于正常报告（退出码 0），
+项目不存在为 3，路径策略拒绝为 4，检查期间文件变化为 7；失败时不输出部分摘录。
+元数据检查无法发现大小与已记录的秒级 mtime 都未变化的内容改写；`sync` 会校验原始字节哈希。
+
+`memory add` 必须显式指定 `--kind decision|note|preference` 和非空的 `--text`。
+记忆仅写入本地 `memory_entries`，来源固定为 `manual`；保留输入正文和 UTC 创建/更新时间。
+`memory list` 可按 `--kind` 筛选，按创建时间、ID 升序输出，并标注“人工记忆，不是项目进度证据”。
+重复输入会新增独立记录；文件资料缺失时仍可记录笔记，但 `status` 不会用笔记补造项目进度。
+终端控制字符以可见转义形式展示，正文存储不变；文档和记忆中的指令只作为数据处理。
+
 ## 本地数据与 doctor
 
 未设置 `WORKPILOT_DATA_DIR` 时，数据位于 `~/.local/share/workpilot/workpilot.db`。
@@ -110,16 +141,16 @@ API Key 只显示“已设置/未设置”。普通本地命令不需要 API Key
 `.env.example` 仅列出配置接口，程序不自动读取 `.env`。
 `WORKPILOT_SEND_TO_MODEL` 仅接受 `true` / `false`，默认 `false`；
 `WORKPILOT_STALE_DAYS` 为正整数，默认 7。附录 B 默认值集中在 `config.py`；
-T02 已使用文件、切分、检索与锁参数，模型预算留待后续任务。
+T02/T03 已使用文件、切分、检索、锁和过期参数，模型预算留待后续任务。
 
 | 退出码 | 当前含义 |
 | --- | --- |
-| 0 | 成功，或用户取消清除 |
-| 2 | 用法错误、重复名称、无效根目录、清除未收到确认 |
+| 0 | 成功、状态报告告警，或用户取消清除 |
+| 2 | 用法错误、重复名称、无效根目录、空白记忆、清除未收到确认 |
 | 3 | 项目或授权文件不存在 |
 | 4 | 白名单、路径、文件类型、大小、编码或切片限制拒绝 |
 | 6 | 配置、权限、数据库或自检错误 |
-| 7 | 同步锁冲突、数据库资源忙或源文件读取期间变化 |
+| 7 | 同步锁冲突、数据库资源忙或源文件读取/检查期间变化 |
 
 ## 本地检查
 
@@ -135,6 +166,8 @@ uv run --offline --no-sync ruff format --check .
 测试使用临时数据目录、清除模型配置，并拦截 Python DNS/TCP 连接。
 T02 验收集中在 `test_markdown.py`、`test_security.py`、`test_sync.py`、`test_sync_lock.py`
 和 `test_retrieval.py`：包含真实 SQLite 事务故障、真实双进程锁竞争和虚构文件替换竞态。
+T03 验收位于 `test_status.py`、`test_memory.py`，覆盖确定性来源报告、过期边界、缺失/撤权、
+元数据检查竞态、SQLite 读取快照、人工记忆持久化/隔离/回滚及源文件哈希不变。
 实际执行命令与计数见 [docs/STATUS.md](docs/STATUS.md)。
 
 ## 依赖与结构
@@ -156,8 +189,9 @@ T02 验收集中在 `test_markdown.py`、`test_security.py`、`test_sync.py`、`
 并将 SDK 隔离在 `llm/` 的实现中；当前不预设未经验证的 SDK 版本。
 
 - `src/workpilot/`：CLI、配置、项目登记、SQLite 存储与锁、离线诊断，以及
-  `security/` 安全读取、`ingestion/` 归一化/切分/同步和 `retrieval.py` 确定性检索。
-- `tests/`：T00/T01 原有 95 项回归，以及 T02 只读索引和检索验收。
+  `security/` 安全读取、`ingestion/` 归一化/切分/同步、`retrieval.py` 确定性检索、
+  `status.py` 离线报告和 `memory.py` 人工记忆。
+- `tests/`：T00–T03 验收；全部使用纯虚构资料与临时数据目录。
 - `tests/fixtures/demo_project/`：纯虚构中文 Markdown、无日期小节、提示注入文本、
   `CANARY-DO-NOT-LEAK`、CRLF 变体和假 `.env`。
 - `.workpilot/`：被忽略的开发缓存或可丢弃数据；`.venv/`、数据库和真实 `.env*` 也被忽略。

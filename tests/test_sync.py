@@ -329,4 +329,11 @@ def test_missing_project_returns_three_and_later_commands_are_absent():
     from typer.main import get_command
 
     assert CliRunner().invoke(app, ["sync", "unknown-project"]).exit_code == 3
-    assert set(get_command(app).commands) == {"init", "project", "doctor", "sync"}
+    assert set(get_command(app).commands) == {
+        "init",
+        "project",
+        "doctor",
+        "sync",
+        "status",
+        "memory",
+    }
