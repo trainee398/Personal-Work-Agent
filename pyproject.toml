@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "workpilot"
+version = "0.1.0"
+description = "A local personal work agent — T00 project scaffold"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "typer>=0.12,<1",
+    "rich>=14,<15",
+    "pydantic>=2,<3",
+]
+
+[project.scripts]
+workpilot = "workpilot.cli:app"
+
+[dependency-groups]
+dev = [
+    "pytest>=8,<9",
+    "ruff>=0.11,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/workpilot"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--strict-config --strict-markers --import-mode=importlib"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["src", "tests"]
+extend-exclude = [".workpilot", ".claude", ".codex", ".agents", ".aws", ".ssh"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

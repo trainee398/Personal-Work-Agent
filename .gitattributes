@@ -1,0 +1,2 @@
+# Keep the fixture's actual CRLF bytes across Git checkouts.
+tests/fixtures/demo_project/STATUS_CRLF.md -text
