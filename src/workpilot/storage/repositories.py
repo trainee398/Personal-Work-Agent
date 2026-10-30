@@ -7,7 +7,9 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
-from workpilot.domain.models import Project, ProjectRegistration, SourceChunk, SourceSnapshot
+from workpilot.domain.models import (
+    MemoryEntry, MemoryKind, Project, ProjectRegistration, SourceChunk, SourceSnapshot,
+)
 from workpilot.errors import ExitCode, NotFoundError, PolicyError, WorkPilotError
 from workpilot.storage.db import transaction
 
@@ -140,6 +142,26 @@ class SourceRepository:
             (project_id, relative_path),
         ).fetchone()
 
+    def list_metadata(self, project_id: str) -> list[sqlite3.Row]:
+        """Cached line counts require no source file content reads."""
+        return self.connection.execute(
+            """SELECT s.*, COUNT(c.id) AS chunk_count, COALESCE(MAX(c.line_end), 0) AS line_count
+            FROM sources s LEFT JOIN source_chunks c ON c.source_id = s.id
+            WHERE s.project_id = ? GROUP BY s.id ORDER BY s.relative_path""",
+            (project_id,),
+        ).fetchall()
+
+    def first_chunk(self, project_id: str, relative_path: str) -> sqlite3.Row | None:
+        project = ProjectRepository(self.connection).get_by_id(project_id)
+        if relative_path not in project.allowed_files:
+            raise PolicyError("来源已撤销授权，不能展示旧正文。")
+        return self.connection.execute(
+            """SELECT c.* FROM source_chunks c JOIN sources s ON s.id = c.source_id
+            WHERE s.project_id = ? AND s.relative_path = ? AND s.active = 1
+            ORDER BY c.line_start LIMIT 1""",
+            (project_id, relative_path),
+        ).fetchone()
+
     def save(
         self, project: Project, snapshot: SourceSnapshot, chunks: list[SourceChunk] | None
     ) -> bool:
@@ -240,3 +262,39 @@ class SourceRepository:
                 if relative not in project.allowed_files and self._invalidate(project_id, relative):
                     revoked.append(relative)
             return revoked
+
+
+class MemoryRepository:
+    """Explicit manual entries only; never copied into source evidence."""
+
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self.connection = connection
+
+    def add(self, project_id: str, kind: MemoryKind, body: str) -> MemoryEntry:
+        with transaction(self.connection):
+            ProjectRepository(self.connection).get_by_id(project_id)
+            timestamp = utc_now()
+            entry = MemoryEntry(
+                id=str(uuid4()), project_id=project_id, kind=kind, body=body,
+                created_at=timestamp, updated_at=timestamp,
+            )
+            self.connection.execute(
+                """INSERT INTO memory_entries (
+                    id, project_id, kind, body, origin, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, 'manual', ?, ?)""",
+                (entry.id, project_id, kind.value, body, timestamp, timestamp),
+            )
+        return entry
+
+    def list(self, project_id: str, kind: MemoryKind | None = None) -> list[MemoryEntry]:
+        ProjectRepository(self.connection).get_by_id(project_id)
+        query = "SELECT * FROM memory_entries WHERE project_id = ?"
+        parameters = [project_id]
+        if kind is not None:
+            query += " AND kind = ?"
+            parameters.append(kind.value)
+        rows = self.connection.execute(query + " ORDER BY created_at, id", parameters)
+        try:
+            return [MemoryEntry(**dict(row)) for row in rows]
+        except ValidationError:
+            raise WorkPilotError("人工记忆数据无效，请检查本地数据库。") from None

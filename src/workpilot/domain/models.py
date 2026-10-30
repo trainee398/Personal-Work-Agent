@@ -1,6 +1,8 @@
 """Validated project records and immutable source snapshots."""
 
+from enum import StrEnum
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -47,3 +49,21 @@ class SourceSnapshot(BaseModel):
     sha256: str
     size_bytes: int
     file_mtime_utc: str
+
+
+class MemoryKind(StrEnum):
+    DECISION = "decision"
+    NOTE = "note"
+    PREFERENCE = "preference"
+
+
+class MemoryEntry(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    project_id: str
+    kind: MemoryKind
+    body: str = Field(repr=False)
+    origin: Literal["manual"] = "manual"
+    created_at: str
+    updated_at: str

@@ -158,6 +158,16 @@ REQUIRED_COLUMNS = {
 
 
 @contextmanager
+def read_snapshot(connection: sqlite3.Connection) -> Iterator[None]:
+    """A coherent read view, including inside a caller's existing transaction."""
+    connection.execute("SAVEPOINT workpilot_read")
+    try:
+        yield
+    finally:
+        connection.execute("RELEASE workpilot_read")
+
+
+@contextmanager
 def transaction(connection: sqlite3.Connection) -> Iterator[None]:
     connection.execute("BEGIN IMMEDIATE")
     try:

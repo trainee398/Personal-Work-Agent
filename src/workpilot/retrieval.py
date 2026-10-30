@@ -6,13 +6,12 @@ import sqlite3
 import string
 import unicodedata
 from collections import Counter
-from collections.abc import Iterator
-from contextlib import contextmanager
 from dataclasses import dataclass
 
 from workpilot.config import EXCERPT_MAX_CHARS, TOP_K_CHUNKS
 from workpilot.errors import PolicyError
 from workpilot.security.policy import hard_denied, relative_source_path
+from workpilot.storage.db import read_snapshot
 from workpilot.storage.repositories import ProjectRepository
 
 ASCII_LOWER = str.maketrans(string.ascii_uppercase, string.ascii_lowercase)
@@ -60,19 +59,8 @@ def search_sources(
     limit: int = TOP_K_CHUNKS,
 ) -> list[SearchHit]:
     """Internal T02 API; no new CLI command or model tool is exposed."""
-    with _read_snapshot(connection):
+    with read_snapshot(connection):
         return _search_sources(connection, project_id, query, limit=limit)
-
-
-@contextmanager
-def _read_snapshot(connection: sqlite3.Connection) -> Iterator[None]:
-    # Authorization and chunks come from one coherent SQLite read snapshot.
-    # A savepoint also respects a caller's existing transaction, without a write lock.
-    connection.execute("SAVEPOINT workpilot_search")
-    try:
-        yield
-    finally:
-        connection.execute("RELEASE workpilot_search")
 
 
 def _search_sources(
