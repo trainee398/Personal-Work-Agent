@@ -1,4 +1,4 @@
-"""Local project registration and offline diagnostics (T01)."""
+"""Local project registration, read-only sync and offline diagnostics."""
 
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -13,12 +13,13 @@ from rich.text import Text
 from workpilot.config import load_settings
 from workpilot.doctor import inspect_environment
 from workpilot.errors import ExitCode, WorkPilotError
+from workpilot.ingestion.sync import sync_project
 from workpilot.projects import ProjectRegistry
 from workpilot.storage.db import SCHEMA_VERSION, database
 
 app = typer.Typer(
     name="workpilot",
-    help="WorkPilot 个人工作助手：本地项目登记与离线环境检查。",
+    help="WorkPilot 个人工作助手：项目登记、只读同步与离线环境检查。",
     add_completion=False,
     invoke_without_command=True,
     pretty_exceptions_show_locals=False,
@@ -121,5 +122,20 @@ def doctor() -> None:
         report = inspect_environment()
         for check in report.checks:
             typer.echo(f"[{check.state}] {check.name}: {check.detail}")
+        if report.exit_code:
+            raise typer.Exit(code=report.exit_code)
+
+
+@app.command("sync")
+def sync(name: Annotated[str, typer.Argument(help="已登记的项目名。")]) -> None:
+    """只读取授权文件，增量更新本地 Markdown 索引。"""
+    with command_errors():
+        report = sync_project(name, load_settings())
+        typer.echo(
+            f"同步结束：{report.project_name}；已索引 {report.indexed}，"
+            f"未变化 {report.unchanged}，已失效 {report.invalidated}。"
+        )
+        for issue in report.issues:
+            typer.echo(f"告警：{issue.relative_path}：{issue.message}", err=True)
         if report.exit_code:
             raise typer.Exit(code=report.exit_code)

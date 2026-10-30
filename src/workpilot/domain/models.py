@@ -1,4 +1,4 @@
-"""The project input and persisted registration models used in T01."""
+"""Validated project records and immutable source snapshots."""
 
 from pathlib import Path
 
@@ -27,3 +27,23 @@ class Project(ProjectRegistration):
     active: bool = True
     created_at: str
     updated_at: str
+
+
+class SourceChunk(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    heading: str | None
+    line_start: int = Field(ge=1)
+    line_end: int = Field(ge=1)
+    body: str = Field(repr=False)
+    content_hash: str
+
+
+class SourceSnapshot(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    relative_path: str
+    text: str = Field(repr=False)
+    sha256: str
+    size_bytes: int
+    file_mtime_utc: str

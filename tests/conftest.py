@@ -35,3 +35,12 @@ def demo_project(tmp_path: Path) -> Path:
     destination = tmp_path / "fictional-project"
     shutil.copytree(source, destination)
     return destination
+
+
+@pytest.fixture
+def registered_project(demo_project: Path):
+    """T02 starts from an ordinary T01 registration of fictional data."""
+    from workpilot.config import load_settings
+    from workpilot.projects import ProjectRegistry
+
+    return ProjectRegistry(load_settings()).add("demo", demo_project, ["STATUS.md"])

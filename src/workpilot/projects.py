@@ -8,21 +8,9 @@ from pydantic import ValidationError
 from workpilot.config import ALLOWED_EXTENSIONS, Settings, has_control_characters
 from workpilot.domain.models import Project, ProjectRegistration
 from workpilot.errors import ExitCode, NotFoundError, PolicyError, WorkPilotError
+from workpilot.security.policy import hard_denied as _hard_denied
 from workpilot.storage.db import database
 from workpilot.storage.repositories import ProjectRepository
-
-
-def _hard_denied(parts: tuple[str, ...]) -> bool:
-    for part in parts:
-        value = part.lower()
-        if (
-            value in {".git", ".ssh", ".aws", ".gnupg", ".ds_store"}
-            or value.startswith(".env")
-            or value.endswith((".pem", ".key", ".p12", ".keystore"))
-            or any(fragment in value for fragment in ("id_rsa", "id_ed25519", "credential"))
-        ):
-            return True
-    return False
 
 
 def validate_registration(

@@ -1,10 +1,10 @@
 # WorkPilot 任务状态
 
-当前：T00、T01 已完成；T02 未开始。唯一规格：`docs/V0_1_SPEC.md`。
-仓库：`https://github.com/trainee398/Personal-Work-Agent.git`；维护分支为 `origin/main`，T01 实现提交见下文。
+当前：T00、T01 已发布；负责人已接受 T02，授权本地提交后进入 T03；本次不推送。唯一规格：`docs/V0_1_SPEC.md`。
+仓库：`https://github.com/trainee398/Personal-Work-Agent.git`；T01 实现 `f52c759`、交接提交 `9cee427` 已核验与远端一致。
 
 规格原样迁移自 `docs/WORKPILOT_V0_1_SPEC.md`，36042 字节，SHA-256：
-`cc2acbc2d643d8028756baea25efc0f7289c8173d98c46dee04ee16387361ffb`（T01 后再次验证未变）。
+`cc2acbc2d643d8028756baea25efc0f7289c8173d98c46dee04ee16387361ffb`（T02 后再次验证未变）。
 
 ## 规格疑问
 
@@ -17,6 +17,12 @@
   审计元数据保留并解除关联。
 - **负责人已裁决，2026-10-30**：认可 `doctor` 只检查、不建库、不迁移、不修复；
   未初始化返回 6，FTS5 缺失与锁占用仅提示，保持现实现。
+- **T02 阶段实现已接受，2026-10-30**：长段续块无法同时重复覆盖原始标题行并满足连续行号/字符上限；首块保留
+  实际标题行，续块保留面包屑、引用其真实连续原始行，不复制标题或虚构行号。超长段先按段落、
+  必要时按完整行切分；单行超过 2000 字符则拒绝（4），同标题内的小块合并不突破上限。
+- **T02 阶段实现已接受，2026-10-30**：缺失、撤权或读取安全校验失败均停用旧来源并删除 chunks；首次读取即缺失不造
+  空哈希的来源行。存储事务失败仍按 §6.4 保留旧哈希/切片并报错；审计写入留 T05。
+  读取期间变化按资源忙返回 7，清理该来源旧切片后停止本次同步；稳定后可重新同步。
 
 ## 交接记录
 
@@ -52,3 +58,27 @@ T01 实现提交：`f52c759d535fd7a9184bb6c890c2787c46f31e4a`（负责人裁决�
 - **未做事项**：未实施 T02–T06、全文读取/索引、Agent 或审计写入；未访问真实公司文件、
   敏感目录、外部业务系统或真实付费模型；未合并分支。源读取的完整安全策略仍由 T02 验收。
 - **下一任务**：获指派后只做 T02；先复核本页、规格、AGENTS 和 Git 状态。
+
+### 2026-10-30 · T02（负责人已接受，授权本地提交）
+
+- **完成项**：读取时重新授权、硬拒绝清单、realpath + `O_NOFOLLOW` 和前后身份校验；
+  原始字节/归一化正文双哈希、确定性切分与 bigram 检索；`sync <项目名>` 幂等增量更新、
+  逐来源原子事务、缺失/撤权清理、重现后激活；跨项目非阻塞 `fcntl` 锁及退出码 7。
+- **文件**：共 19 个本地变更文件。新增 `ingestion/{__init__,markdown,sync}.py`、
+  `security/{__init__,policy}.py`、`retrieval.py`、`storage/locking.py`（均在 `src/workpilot/`）；
+  更新 CLI、domain/models、projects、storage/repositories；新增
+  `tests/test_{markdown,security,sync,sync_lock,retrieval}.py`，补充 conftest；更新 README 和本页。
+  沿用 T01 schema、依赖与架构；原有六个测试文件、全部原始 fixture、规格和依赖配置未改。
+- **测试结果（已执行，macOS / Python 3.12.14）**：`.venv/bin/python -m pytest -q`：
+  **229 passed in 1.65s**（原有 95 项 + 新增 134 项）；`.venv/bin/ruff check .`：通过；
+  `.venv/bin/ruff format --check .`：**37 files already formatted**；`git diff --check`：通过。
+  已安装的 `.venv/bin/workpilot` 在临时虚构项目完成 **12 步 CLI 演示**：帮助、初始化、登记、
+  两次 `sync fictional`、doctor、错误的 `sync --project fictional`（2）、缺失同步（3）、
+  恢复同步、移除、移除后同步（3）、doctor；切片数 **12 → 6 → 12 → 0**，只读操作前后源文件
+  哈希一致，正文/canary 未出现在输出。pytest 另验证双进程锁竞争立即返回 7、事务中途失败
+  完整回滚、读取竞态与中文检索排序；规格和原始 fixture 哈希保持不变。
+- **风险**：长段续块的标题/行号解释、单行超过 2000 字符返回 4、失效处理边界见上方
+  “规格疑问”；负责人已接受阶段实现，规格正文仍由负责人统一；Python 3.11、Linux、Windows 未实测。
+- **未做事项**：验收时 T02 尚未提交或推送，基于 `9cee427`；未实现 T03–T06、status/memory/
+  ask/audit、模型工具或审计写入；未访问真实公司文件、敏感目录、业务系统或付费模型。
+- **下一任务**：负责人已于 2026-10-30 接受 T02；复查通过后只做本地提交，随后实现 T03。
