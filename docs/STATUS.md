@@ -1,47 +1,52 @@
 # WorkPilot 任务状态
 
-当前任务：T00（已完成）；T01 尚未开始。唯一规格：`docs/V0_1_SPEC.md`。
-项目仓库：`https://github.com/trainee398/Personal-Work-Agent.git`（负责人提供；本次仅记录地址）。
+当前：T00、T01 已完成；T02 未开始。唯一规格：`docs/V0_1_SPEC.md`。
+仓库：`https://github.com/trainee398/Personal-Work-Agent.git`；T00 已发布，T01 为本地未提交改动。
 
-## 起始检查（2026-10-30）
-
-- 显式指定 Git 目录及工作区后检查成功：`main`，尚无提交；原有规格未跟踪。
-  自动仓库发现曾失败，未重建或修改 Git 元数据。没有现成的 `AGENTS.md`。
-- `docs/WORKPILOT_V0_1_SPEC.md` 已原样迁移到权威路径，36042 字节；
-  SHA-256：`cc2acbc2d643d8028756baea25efc0f7289c8173d98c46dee04ee16387361ffb`。
-- 默认 Python 3.9.6 不满足要求；本机可用 Python 3.12.14，uv 0.12.14。
+规格原样迁移自 `docs/WORKPILOT_V0_1_SPEC.md`，36042 字节，SHA-256：
+`cc2acbc2d643d8028756baea25efc0f7289c8173d98c46dee04ee16387361ffb`（T01 后再次验证未变）。
 
 ## 规格疑问
 
-- §2 要求 SDK 固定到已验证版本，T00 又明确不实现 Agent：本次不安装 SDK；
-  T04 引入时验证具体版本并记录 README，当前不声称完成 SDK 验收。
-- §2 的 `setdefault` 示例不会覆盖外部的 `0`，§2.1 则要求强制设为 `1`：
-  T00 采用更安全的强制设为 `1`，规格原文未改；SDK 运行时关闭及 doctor 验证留后续任务。
+- **负责人已裁决，2026-10-30**：认可 SDK 固定版本与 tracing 现状；T04 引入 SDK 时固定
+  已验证版本，tracing 保持强制设为 `1`；§2 措辞由负责人统一，实现者不修改规格。
+- **负责人已裁决，2026-10-30**：认可 `projects.allowed_files_json`，保持现实现；
+  不借未索引的 `sources` 行伪造哈希或时间，仍为七张表。
+- **负责人已裁决，2026-10-30**：认可 `projects.active` 和现有移除/彻底清除语义；
+  普通移除停用来源、删除 chunks、保留记忆与名称；确认清除后删除登记/来源/记忆，
+  审计元数据保留并解除关联。
+- **负责人已裁决，2026-10-30**：认可 `doctor` 只检查、不建库、不迁移、不修复；
+  未初始化返回 6，FTS5 缺失与锁占用仅提示，保持现实现。
 
 ## 交接记录
 
 ### 2026-10-30 · T00
 
-- **完成项**：可安装的 src 布局、Typer 帮助入口、Python >=3.11 元数据、主版本约束与
-  `uv.lock`、pytest/ruff 配置、协作约定与安装文档；规格原样归位。虚构 fixture 含中文、
-  无日期小节、注入文本、canary、真实 CRLF 变体及假 `.env`。
-- **文件**：`AGENTS.md`、`README.md`、`pyproject.toml`、`uv.lock`、`.python-version`、
-  `.env.example`、`.gitignore`、`.gitattributes`、`docs/V0_1_SPEC.md`、`docs/STATUS.md`；
-  `src/workpilot/{__init__,cli}.py`；`tests/{conftest,test_cli,test_fixtures}.py`；
-  `tests/fixtures/README.md`、`tests/fixtures/demo_project/{STATUS.md,STATUS_CRLF.md,.env}`。
-- **测试结果（已执行）**：macOS / Python 3.12.14；新建 `.venv` 安装成功。
-  首次 PyPI 访问被沙箱 DNS 阻断，经批准重试成功；随后以 `uv sync --locked --offline`
-  在 `.workpilot/t00-clean-venv` 新建环境安装成功（显式使用项目内缓存与 3.12 解释器）。
-  `.venv/bin/workpilot --help` 返回 0，新环境入口在 `/private/tmp` 且无模型配置时也返回 0；
-  `.venv/bin/python -m pytest`：**8 passed**；`.venv/bin/ruff check .` 通过；
-  `.venv/bin/ruff format --check .` 通过；新环境 `uv pip check` 验证 18 个包兼容。
-  规格 SHA-256 未变、仅有一个规格副本；Git 确认假 `.env` 放行、CRLF 的 `text` 属性 unset。
-  验证版本：Typer 0.27.3、Rich 14.3.4、Pydantic 2.14.2、pytest 8.4.2、ruff 0.17.3。
-- **风险**：Python 3.9.6 仍是系统默认，须按 README 选择 3.11+；本次未验证 Python 3.11
-  或 Linux/Windows。Git 自动发现曾失败，显式 `--git-dir=.git --work-tree=.` 可检查；
-  未改动其元数据。SDK 版本和 tracing 表述问题按上方“规格疑问”保留。
-- **未做事项**：T01–T06 的数据库、注册、索引、检索、Agent、审计及完整安全验收均未实施；
-  fixture 检查不代表已实现注入防御或硬拒绝策略。未读取真实公司文件/敏感目录、未修改业务
-  项目、未运行外部业务操作或真实付费模型；未配置 Git remote、未提交、推送或合并分支。
-- **下一任务**：仅在获指派后开始 T01，按规格实现本地配置、SQLite 建库/迁移、
-  repositories、数据权限、项目注册与 `doctor`；先复核本页、规格、AGENTS 和 Git 状态。
+- **完成项**：包/CLI/依赖锁、协作文档、全部纯虚构 fixture；原始完整交接见
+  [T00 发布快照](https://github.com/trainee398/Personal-Work-Agent/blob/1369946422bf3830f29d5874c73c01636bd54718/docs/STATUS.md)。
+- **文件**：共 19 个文件，完整清单见上述快照。
+- **测试结果**：新环境安装、CLI 帮助、8 项 pytest、ruff 检查与格式检查通过。
+- **风险**：当时默认 Python 3.9.6、Git 自动发现异常，已在下面的交接中解决。
+- **未做事项**：当时未做 T01–T06、未配置或推送远端，详见快照中的历史记录。
+- **下一任务**：T01，已按用户后续指令完成。
+
+### 2026-10-30 · 发布、Python 升级及 T01
+
+- **完成项**：按用户顺序将 T00 提交并推送 `origin/main`，远端核验为
+  `1369946422bf3830f29d5874c73c01636bd54718`；用户级 `python/python3` 升级为 3.12.14，
+  新 shell 验证通过。随后完成 T01：配置/默认值、SQLite 幂等迁移、事务/约束/权限、项目
+  登记/列表/移除/确认清除、离线 doctor 和错误退出码；普通 Git 自动发现现已正常。
+- **文件**：新增 `src/workpilot/{config,errors,projects,doctor}.py`、`domain/{__init__,models}.py`、
+  `storage/{__init__,db,repositories}.py`；新增 `tests/test_{config,storage,projects,doctor}.py`；
+  更新 CLI、conftest/test_cli、README、AGENTS、pyproject、`.env.example` 和本页。
+  用户级默认入口为 `~/.local/bin/{python,python3}`；原有业务项目及虚拟环境未改动。
+- **测试结果（已执行）**：`uv --no-config --cache-dir .workpilot/uv-cache sync --locked --offline --python 3.12 --no-python-downloads --no-progress` 安装更新通过；
+  `.venv/bin/python -m pytest -q`：**95 passed**；`.venv/bin/ruff check .`、
+  `.venv/bin/ruff format --check .`、`git diff --check` 均通过。安装后的 CLI 在临时虚构项目
+  完成 11 步流程（含重复初始化、重名拒绝、诊断、取消/确认清除）；SQLite 3.53.1、schema 1、
+  目录/数据库 0700/0600 均符合预期。规格、原 fixture 和演示源文件哈希未变。
+- **风险**：四条规格疑问已由负责人裁决；Python 3.11 与 Linux/Windows 未实测。
+  T01 正在收尾复核，提交哈希在提交后补记；当前尚未推送。
+- **未做事项**：未实施 T02–T06、全文读取/索引、Agent 或审计写入；未访问真实公司文件、
+  敏感目录、外部业务系统或真实付费模型；未合并分支。源读取的完整安全策略仍由 T02 验收。
+- **下一任务**：获指派后只做 T02；先复核本页、规格、AGENTS 和 Git 状态。

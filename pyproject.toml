@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "workpilot"
 version = "0.1.0"
-description = "A local personal work agent — T00 project scaffold"
+description = "A local personal work agent with explicit project registration and offline diagnostics"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

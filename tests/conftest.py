@@ -1,5 +1,6 @@
 """Keep tests independent of user configuration and remote services."""
 
+import shutil
 import socket
 from pathlib import Path
 from typing import NoReturn
@@ -18,9 +19,19 @@ def isolated_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Pat
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("WORKPILOT_MODEL", raising=False)
     monkeypatch.setenv("WORKPILOT_SEND_TO_MODEL", "false")
+    monkeypatch.setenv("WORKPILOT_STALE_DAYS", "7")
+    monkeypatch.setenv("OPENAI_AGENTS_DISABLE_TRACING", "1")
     monkeypatch.setenv("WORKPILOT_DATA_DIR", str(data_dir))
     monkeypatch.setattr(socket, "create_connection", deny_network)
     monkeypatch.setattr(socket, "getaddrinfo", deny_network)
     monkeypatch.setattr(socket.socket, "connect", deny_network)
     monkeypatch.setattr(socket.socket, "connect_ex", deny_network)
     return data_dir
+
+
+@pytest.fixture
+def demo_project(tmp_path: Path) -> Path:
+    source = Path(__file__).parent / "fixtures" / "demo_project"
+    destination = tmp_path / "fictional-project"
+    shutil.copytree(source, destination)
+    return destination

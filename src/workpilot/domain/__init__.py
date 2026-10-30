@@ -1,0 +1,1 @@
+"""Validated local project records."""
